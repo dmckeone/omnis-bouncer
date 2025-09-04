@@ -1,12 +1,15 @@
 mod api;
 mod constants;
+mod discovery;
 mod errors;
 mod reverse_proxy;
 mod state;
 
 use axum::{middleware, serve, Router};
-use axum_reverse_proxy::ReverseProxy;
-use std::sync::Arc;
+use axum_reverse_proxy::DiscoverableBalancedProxy;
+use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{
@@ -17,13 +20,14 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::constants::STATIC_ASSETS_DIR;
+use crate::discovery::{add_upstreams, remove_upstreams, SimpleDiscoveryStream};
 use crate::state::{AppState, Config};
 
 #[tokio::main]
 async fn main() {
     // Initialize tracing
     FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::DEBUG)
         .with_target(false)
         .compact()
         .init();
@@ -36,14 +40,40 @@ async fn main() {
     });
 
     // Create our app state
-    let state = AppState { config };
+    let state = AppState {
+        config,
+        upstreams: Arc::new(RwLock::new(vec![])),
+        upstream_waker: Arc::new(Mutex::new(None)),
+    };
 
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
-    // TODO: Look at load balancing: https://github.com/tom-lubenow/axum-reverse-proxy/blob/main/src/balanced_proxy.rs
+    // Create a discovery stream with some example services
+    let discovery_stream =
+        SimpleDiscoveryStream::new(state.upstreams.clone(), state.upstream_waker.clone());
+
+    // Create an HTTP client
+    let mut connector = HttpConnector::new();
+    connector.set_nodelay(true);
+    connector.enforce_http(false);
+    connector.set_keepalive(Some(std::time::Duration::from_secs(60)));
+    connector.set_connect_timeout(Some(std::time::Duration::from_secs(10)));
+    connector.set_reuse_address(true);
+
+    let client = Client::builder(hyper_util::rt::TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(60))
+        .pool_max_idle_per_host(32)
+        .retry_canceled_requests(true)
+        .set_host(true)
+        .build(connector);
+
+    // Create proxy, kickstart discovery, and return to immutable
+    let mut proxy = DiscoverableBalancedProxy::new_with_client("/", client, discovery_stream);
+    proxy.start_discovery().await;
+    let proxy = proxy;
+
     // Create the reverse proxy with the queue injection middleware
-    let proxy = ReverseProxy::new("/", "http://127.0.0.1:63111");
     let proxy_router: Router = proxy.into();
     let proxy_router = proxy_router.layer(middleware::from_fn_with_state(
         state.clone(),
@@ -69,6 +99,53 @@ async fn main() {
             // https://github.com/tokio-rs/axum/blob/main/examples/tracing-aka-logging/src/main.rs
             TraceLayer::new_for_http(),
         );
+
+    // Give discovery a moment to find services
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let add_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        // Wait 1 second to simulate a user change
+        std::thread::sleep(Duration::from_secs(1));
+
+        info!("Add");
+
+        add_upstreams(
+            add_state,
+            &vec![
+                String::from("http://127.0.0.1:63111"),
+                String::from("http://127.0.0.1:63112"),
+                String::from("http://127.0.0.1:63113"),
+            ],
+        )
+    });
+
+    let remove_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        // Wait 1 second to simulate a user change
+        std::thread::sleep(Duration::from_secs(5));
+
+        info!("Remove");
+
+        remove_upstreams(
+            remove_state,
+            &vec![
+                String::from("http://127.0.0.1:63111"),
+                String::from("http://127.0.0.1:63112"),
+                String::from("http://127.0.0.1:63113"),
+            ],
+        )
+    });
+
+    let readd_state = state.clone();
+    tokio::task::spawn_blocking(move || {
+        // Wait 1 second to simulate a user change
+        std::thread::sleep(Duration::from_secs(15));
+
+        info!("Re-add");
+
+        add_upstreams(readd_state, &vec![String::from("http://127.0.0.1:63111")])
+    });
 
     // Create a TCP listener
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
