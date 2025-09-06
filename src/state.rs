@@ -1,6 +1,7 @@
-use std::sync::RwLock;
-use std::sync::{Arc, Mutex};
-use std::task::Waker;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::upstream::UpstreamPool;
 
 #[derive(Debug)]
 pub struct Config {
@@ -13,6 +14,5 @@ pub struct Config {
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub upstreams: Arc<RwLock<Vec<String>>>,
-    pub upstream_waker: Arc<Mutex<Option<Waker>>>,
+    pub upstream_pool: Arc<RwLock<UpstreamPool>>,
 }

@@ -4,13 +4,15 @@ mod discovery;
 mod errors;
 mod reverse_proxy;
 mod state;
+mod upstream;
 
 use axum::{middleware, serve, Router};
 use axum_reverse_proxy::DiscoverableBalancedProxy;
 use hyper_util::client::legacy::{connect::HttpConnector, Client};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer, trace::TraceLayer,
@@ -20,8 +22,62 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::constants::STATIC_ASSETS_DIR;
-use crate::discovery::{add_upstreams, remove_upstreams, SimpleDiscoveryStream};
+use crate::discovery::SimpleDiscoveryStream;
 use crate::state::{AppState, Config};
+use crate::upstream::{add_upstreams, remove_upstreams, UpstreamPool};
+
+// Testing functions for adding dynamic upstream values
+fn test_dynamic_upstreams(state: &AppState) {
+    let add_state = state.clone();
+    tokio::task::spawn(async move {
+        // Wait 1 second to simulate a user change
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        info!("Add");
+
+        add_upstreams(
+            &add_state,
+            &vec![
+                String::from("http://127.0.0.1:63111"),
+                String::from("http://127.0.0.1:63112"),
+                String::from("http://127.0.0.1:63113"),
+            ],
+        )
+        .await;
+    });
+
+    let remove_state = state.clone();
+    tokio::task::spawn(async move {
+        // Wait 1 second to simulate a user change
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        info!("Remove");
+        remove_upstreams(
+            &remove_state,
+            &vec![
+                String::from("http://127.0.0.1:63111"),
+                String::from("http://127.0.0.1:63112"),
+            ],
+        )
+        .await;
+    });
+
+    let readd_state = state.clone();
+    tokio::task::spawn(async move {
+        // Wait 1 second to simulate a user change
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        info!("Re-add");
+        add_upstreams(
+            &readd_state,
+            &vec![
+                String::from("http://127.0.0.1:63111"),
+                String::from("http://127.0.0.1:63113"),
+            ],
+        )
+        .await;
+    });
+}
 
 #[tokio::main]
 async fn main() {
@@ -42,16 +98,14 @@ async fn main() {
     // Create our app state
     let state = AppState {
         config,
-        upstreams: Arc::new(RwLock::new(vec![])),
-        upstream_waker: Arc::new(Mutex::new(None)),
+        upstream_pool: Arc::new(RwLock::new(UpstreamPool::new())),
     };
 
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
     // Create a discovery stream with some example services
-    let discovery_stream =
-        SimpleDiscoveryStream::new(state.upstreams.clone(), state.upstream_waker.clone());
+    let discovery_stream = SimpleDiscoveryStream::new(state.upstream_pool.clone());
 
     // Create an HTTP client
     let mut connector = HttpConnector::new();
@@ -100,52 +154,7 @@ async fn main() {
             TraceLayer::new_for_http(),
         );
 
-    // Give discovery a moment to find services
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let add_state = state.clone();
-    tokio::task::spawn_blocking(move || {
-        // Wait 1 second to simulate a user change
-        std::thread::sleep(Duration::from_secs(1));
-
-        info!("Add");
-
-        add_upstreams(
-            add_state,
-            &vec![
-                String::from("http://127.0.0.1:63111"),
-                String::from("http://127.0.0.1:63112"),
-                String::from("http://127.0.0.1:63113"),
-            ],
-        )
-    });
-
-    let remove_state = state.clone();
-    tokio::task::spawn_blocking(move || {
-        // Wait 1 second to simulate a user change
-        std::thread::sleep(Duration::from_secs(5));
-
-        info!("Remove");
-
-        remove_upstreams(
-            remove_state,
-            &vec![
-                String::from("http://127.0.0.1:63111"),
-                String::from("http://127.0.0.1:63112"),
-                String::from("http://127.0.0.1:63113"),
-            ],
-        )
-    });
-
-    let readd_state = state.clone();
-    tokio::task::spawn_blocking(move || {
-        // Wait 1 second to simulate a user change
-        std::thread::sleep(Duration::from_secs(15));
-
-        info!("Re-add");
-
-        add_upstreams(readd_state, &vec![String::from("http://127.0.0.1:63111")])
-    });
+    test_dynamic_upstreams(&state);
 
     // Create a TCP listener
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();

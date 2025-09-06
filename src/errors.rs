@@ -43,7 +43,7 @@ where
 mod tests {
     use super::*;
     use axum::routing::get;
-    use axum::{Router, body::Body, http::Request, http::StatusCode};
+    use axum::{body::Body, http::Request, http::StatusCode, Router};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
