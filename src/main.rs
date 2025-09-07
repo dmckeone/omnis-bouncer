@@ -1,5 +1,6 @@
 mod api;
 mod constants;
+mod database;
 mod discovery;
 mod errors;
 mod reverse_proxy;
@@ -17,10 +18,11 @@ use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer, trace::TraceLayer,
 };
 use tower_serve_static::ServeDir;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::constants::STATIC_ASSETS_DIR;
+use crate::database::create_redis_pool;
 use crate::discovery::UpstreamPoolStream;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
@@ -85,9 +87,19 @@ async fn main() {
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
     });
 
+    // Create database connections
+    let redis = match create_redis_pool("redis://127.0.0.1") {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to connect to redis");
+            return;
+        }
+    };
+
     // Create our app state
     let state = AppState {
         config,
+        redis,
         upstream_pool: Arc::new(UpstreamPool::new()),
     };
 

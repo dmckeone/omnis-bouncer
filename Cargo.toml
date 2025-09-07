@@ -19,3 +19,5 @@ tower-serve-static = { version = "0.1", features = ["metadata"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 hyper-util = "0.1.16"
+deadpool-redis = { version = "0.22.0", features = ["rt_tokio_1"] }
+uuid = { version = "1.18.1", features = ["fast-rng", "v4"] }

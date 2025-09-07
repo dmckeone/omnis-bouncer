@@ -1,10 +1,11 @@
-use axum::http::HeaderName;
 use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderName;
 use axum::response::Response;
 use axum::{extract, middleware};
 use tower_cookies::{Cookie, Cookies};
 use tracing::info;
 
+use crate::database::{get_key, new_uuid};
 use crate::errors;
 use crate::state::AppState;
 
@@ -22,10 +23,14 @@ pub async fn middleware(
     let method = req.method().clone();
     let uri = req.uri().clone();
 
+    // Test retrieving something from redis
+    let value = get_key(&state.redis).await?;
+    info!("Received from Redis: {}", value);
+
     // Extract queue token from cookie
     let queue_token = match cookie.clone() {
         Some(c) => String::from(c.value()),
-        None => String::from("test-queue-id"),
+        None => new_uuid(),
     };
 
     // Process request
