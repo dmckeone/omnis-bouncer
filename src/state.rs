@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use crate::upstream::UpstreamPool;
 
@@ -14,5 +13,5 @@ pub struct Config {
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub upstream_pool: Arc<RwLock<UpstreamPool>>,
+    pub upstream_pool: Arc<UpstreamPool>,
 }

@@ -12,7 +12,6 @@ use hyper_util::client::legacy::{connect::HttpConnector, Client};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{
     compression::CompressionLayer, decompression::RequestDecompressionLayer, trace::TraceLayer,
@@ -22,60 +21,51 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use crate::constants::STATIC_ASSETS_DIR;
-use crate::discovery::SimpleDiscoveryStream;
+use crate::discovery::UpstreamPoolStream;
 use crate::state::{AppState, Config};
-use crate::upstream::{add_upstreams, remove_upstreams, UpstreamPool};
+use crate::upstream::UpstreamPool;
 
 // Testing functions for adding dynamic upstream values
 fn test_dynamic_upstreams(state: &AppState) {
-    let add_state = state.clone();
+    let state = state.clone();
     tokio::task::spawn(async move {
         // Wait 1 second to simulate a user change
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         info!("Add");
-
-        add_upstreams(
-            &add_state,
-            &vec![
+        state
+            .upstream_pool
+            .add_upstreams(&vec![
                 String::from("http://127.0.0.1:63111"),
                 String::from("http://127.0.0.1:63112"),
                 String::from("http://127.0.0.1:63113"),
-            ],
-        )
-        .await;
-    });
+            ])
+            .await;
 
-    let remove_state = state.clone();
-    tokio::task::spawn(async move {
-        // Wait 1 second to simulate a user change
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         info!("Remove");
-        remove_upstreams(
-            &remove_state,
-            &vec![
+        state
+            .upstream_pool
+            .remove_upstreams(&vec![
                 String::from("http://127.0.0.1:63111"),
                 String::from("http://127.0.0.1:63112"),
-            ],
-        )
-        .await;
-    });
+                String::from("http://127.0.0.1:63113"),
+            ])
+            .await;
 
-    let readd_state = state.clone();
-    tokio::task::spawn(async move {
-        // Wait 1 second to simulate a user change
-        tokio::time::sleep(Duration::from_secs(15)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
 
         info!("Re-add");
-        add_upstreams(
-            &readd_state,
-            &vec![
-                String::from("http://127.0.0.1:63111"),
-                String::from("http://127.0.0.1:63113"),
-            ],
-        )
-        .await;
+        state
+            .upstream_pool
+            .add_upstreams(&vec![String::from("http://127.0.0.1:63111")])
+            .await;
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let current_uris = state.upstream_pool.current_uris().await;
+        info!("Pool State: {:?}", current_uris)
     });
 }
 
@@ -98,14 +88,14 @@ async fn main() {
     // Create our app state
     let state = AppState {
         config,
-        upstream_pool: Arc::new(RwLock::new(UpstreamPool::new())),
+        upstream_pool: Arc::new(UpstreamPool::new()),
     };
 
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
-    // Create a discovery stream with some example services
-    let discovery_stream = SimpleDiscoveryStream::new(state.upstream_pool.clone());
+    // Create a pool discovery stream for dynamic URI addition and removal
+    let pool_stream = UpstreamPoolStream::new(state.upstream_pool.clone());
 
     // Create an HTTP client
     let mut connector = HttpConnector::new();
@@ -123,7 +113,7 @@ async fn main() {
         .build(connector);
 
     // Create proxy, kickstart discovery, and return to immutable
-    let mut proxy = DiscoverableBalancedProxy::new_with_client("/", client, discovery_stream);
+    let mut proxy = DiscoverableBalancedProxy::new_with_client("/", client, pool_stream);
     proxy.start_discovery().await;
     let proxy = proxy;
 
