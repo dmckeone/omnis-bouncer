@@ -2,12 +2,24 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 // Generic Error type for all errors in handlers
+#[derive(Debug)]
 pub enum Error {
+    ScriptError(String),
     Unknown(anyhow::Error),
 }
 
 // Generic Result type for all results in handlers
 pub type Result<T> = core::result::Result<T, Error>;
+
+fn script_error(error: String) -> Response {
+    tracing::error!("script error: {}", error);
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error".to_string(),
+    )
+        .into_response()
+}
 
 fn internal_server_error(error: anyhow::Error) -> Response {
     tracing::error!("unknown error: {}", error);
@@ -23,6 +35,7 @@ fn internal_server_error(error: anyhow::Error) -> Response {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
+            Error::ScriptError(e) => script_error(e),
             Error::Unknown(e) => internal_server_error(e),
         }
     }

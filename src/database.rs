@@ -1,6 +1,5 @@
 use deadpool_redis::redis::cmd;
-use deadpool_redis::{Config, Pool, Runtime};
-use uuid::Uuid;
+use deadpool_redis::{Config, Connection, Pool, Runtime};
 
 use crate::errors::Result;
 
@@ -10,13 +9,12 @@ pub fn create_redis_pool(uri: impl Into<String>) -> Result<Pool> {
     Ok(pool)
 }
 
-pub fn new_uuid() -> String {
-    Uuid::new_v4().to_string()
+pub async fn get_connection(pool: &Pool) -> Result<Connection> {
+    Ok(pool.get().await?)
 }
 
-pub async fn get_key(pool: &Pool) -> Result<String> {
-    let key = "test_key";
-    let mut conn = pool.get().await?;
-    let result = cmd("GET").arg(&[key]).query_async(&mut conn).await?;
-    Ok(result)
+// Get current time from server
+pub async fn current_time(conn: &mut Connection) -> Result<usize> {
+    let (unix_timestamp, _): (usize, usize) = cmd("TIME").query_async(conn).await?;
+    Ok(unix_timestamp)
 }

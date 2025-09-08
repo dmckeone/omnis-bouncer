@@ -1,6 +1,6 @@
-use deadpool_redis::Pool as RedisPool;
 use std::sync::Arc;
 
+use crate::queue::QueueControl;
 use crate::upstream::UpstreamPool;
 
 #[derive(Debug)]
@@ -14,6 +14,6 @@ pub struct Config {
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub redis: RedisPool,
+    pub queue: Arc<QueueControl>,
     pub upstream_pool: Arc<UpstreamPool>,
 }

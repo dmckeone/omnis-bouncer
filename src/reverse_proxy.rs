@@ -5,7 +5,6 @@ use axum::{extract, middleware};
 use tower_cookies::{Cookie, Cookies};
 use tracing::info;
 
-use crate::database::{get_key, new_uuid};
 use crate::errors;
 use crate::state::AppState;
 
@@ -24,13 +23,13 @@ pub async fn middleware(
     let uri = req.uri().clone();
 
     // Test retrieving something from redis
-    let value = get_key(&state.redis).await?;
-    info!("Received from Redis: {}", value);
+    // let value = get_key(&state.redis).await?;
+    // info!("Received from Redis: {}", value);
 
     // Extract queue token from cookie
     let queue_token = match cookie.clone() {
         Some(c) => String::from(c.value()),
-        None => new_uuid(),
+        None => String::from(state.queue.new_id()),
     };
 
     // Process request

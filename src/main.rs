@@ -3,6 +3,7 @@ mod constants;
 mod database;
 mod discovery;
 mod errors;
+mod queue;
 mod reverse_proxy;
 mod state;
 mod upstream;
@@ -24,6 +25,7 @@ use tracing_subscriber::FmtSubscriber;
 use crate::constants::STATIC_ASSETS_DIR;
 use crate::database::create_redis_pool;
 use crate::discovery::UpstreamPoolStream;
+use crate::queue::QueueControl;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
 
@@ -61,7 +63,7 @@ fn test_dynamic_upstreams(state: &AppState) {
         info!("Re-add");
         state
             .upstream_pool
-            .add_upstreams(&vec![String::from("http://127.0.0.1:63111")])
+            .add_upstreams(&vec![String::from("http://127.0.0.1:80")])
             .await;
 
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -75,7 +77,7 @@ fn test_dynamic_upstreams(state: &AppState) {
 async fn main() {
     // Initialize tracing
     FmtSubscriber::builder()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::INFO)
         .with_target(false)
         .compact()
         .init();
@@ -87,19 +89,33 @@ async fn main() {
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
     });
 
-    // Create database connections
+    // Create Redis Pool
     let redis = match create_redis_pool("redis://127.0.0.1") {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to connect to redis");
+            error!("Failed to connect to redis: {:?}", e);
             return;
         }
+    };
+
+    // Create queue control and initialize functions
+    let queue = match QueueControl::new(redis) {
+        Ok(q) => q,
+        Err(e) => {
+            error!("Failed to initialize queue: {:?}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = queue.init().await {
+        error!("Failed to initialize queue functions: {:?}", e);
+        return;
     };
 
     // Create our app state
     let state = AppState {
         config,
-        redis,
+        queue: Arc::new(queue),
         upstream_pool: Arc::new(UpstreamPool::new()),
     };
 
