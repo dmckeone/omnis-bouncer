@@ -6,13 +6,13 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["http2", "multipart"] }
-axum-reverse-proxy = "1.0"
+axum-reverse-proxy = { version = "1.0", features = ["tls"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 futures-util = "0.3"
 http-body-util = "0.1"
 hyper-util = "0.1"
 include_dir = "0.7"
-redis = "0.32"
+redis = { version = "0.32", features = ["tokio-rustls-comp"] }
 serde_json = "1.0"
 tokio = { version = "1.47", features = ["full"] }
 tower = "0.5"
