@@ -1,7 +1,7 @@
 use deadpool_redis::redis::cmd;
 use deadpool_redis::{Config, Connection, Pool, Runtime};
 
-use crate::errors::Result;
+use crate::errors::{Error, Result};
 
 pub fn create_redis_pool(uri: impl Into<String>) -> Result<Pool> {
     let cfg = Config::from_url(uri.into());
@@ -15,8 +15,11 @@ pub async fn get_connection(pool: &Pool) -> Result<Connection> {
 
 // Get current time from server
 pub async fn current_time(conn: &mut Connection) -> Result<usize> {
-    let (unix_timestamp, _): (usize, usize) = cmd("TIME").query_async(conn).await?;
-    Ok(unix_timestamp)
+    let result: (Option<usize>, Option<usize>) = cmd("TIME").query_async(conn).await?;
+    match result.0 {
+        Some(t) => Ok(t),
+        None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+    }
 }
 
 #[cfg(test)]
@@ -40,7 +43,6 @@ pub mod test {
             Ok(p) => p,
             Err(e) => {
                 warn!("Redis server not available: {:?}", e);
-                let msg = format!("Redis server not available: {:?}", e);
                 return None;
             }
         };
