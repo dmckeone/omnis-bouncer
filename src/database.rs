@@ -23,14 +23,14 @@ pub async fn current_time(conn: &mut Connection) -> Result<usize> {
 pub mod test {
     use super::*;
     use std::env;
-    use std::result::Result;
+    use tracing::warn;
 
-    pub fn create_test_pool() -> Result<Pool, String> {
+    pub fn create_test_pool() -> Option<Pool> {
         let uri = match env::var("TEST_REDIS_URI") {
             Ok(u) => u,
             Err(e) => {
-                let msg = format!("TEST_REDIS_URI error: {:?}", e);
-                return Err(msg);
+                warn!("TEST_REDIS_URI error: {:?}", e);
+                return None;
             }
         };
 
@@ -39,11 +39,12 @@ pub mod test {
         let pool = match create_redis_pool(uri.trim()) {
             Ok(p) => p,
             Err(e) => {
+                warn!("Redis server not available: {:?}", e);
                 let msg = format!("Redis server not available: {:?}", e);
-                return Err(msg);
+                return None;
             }
         };
 
-        Ok(pool)
+        Some(pool)
     }
 }

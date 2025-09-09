@@ -238,19 +238,15 @@ impl QueueControl {
 #[cfg(test)]
 mod test {
     use super::*;
-
-    use tracing::warn;
-
     use crate::database::test::create_test_pool;
+    use tracing::warn;
+    use tracing_test::traced_test;
 
     #[test]
+    #[traced_test]
     fn test_construct() {
-        let pool = match create_test_pool() {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Pool error: {}", e);
-                return;
-            }
+        let Some(pool) = create_test_pool() else {
+            return;
         };
 
         match QueueControl::new(pool) {
@@ -260,13 +256,10 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_init() {
-        let pool = match create_test_pool() {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Pool error: {}", e);
-                return;
-            }
+        let Some(pool) = create_test_pool() else {
+            return;
         };
 
         let queue =
@@ -274,7 +267,10 @@ mod test {
 
         match queue.init().await {
             Ok(_) => assert!(true),
-            _ => panic!("QueueControl::new Error"),
+            Err(e) => {
+                warn!("QueueControl::new Error: {:?}", e);
+                assert!(false)
+            }
         }
     }
 }
