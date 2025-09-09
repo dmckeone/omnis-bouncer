@@ -8,13 +8,13 @@ use crate::queue::models::{QueueRotate, StoreCapacity};
 use crate::queue::scripts::Scripts;
 use crate::queue::util::{from_redis_bool, to_redis_bool};
 
-pub(crate) struct QueueControl {
+pub struct QueueControl {
     pool: RedisPool,
     scripts: Scripts,
 }
 
 impl QueueControl {
-    pub(crate) fn new(pool: RedisPool) -> Result<Self> {
+    pub fn new(pool: RedisPool) -> Result<Self> {
         let queue = Self {
             pool,
             scripts: Scripts::new()?,
@@ -23,14 +23,14 @@ impl QueueControl {
         Ok(queue)
     }
 
-    pub(crate) async fn init(&self) -> Result<()> {
+    pub async fn init(&self) -> Result<()> {
         let mut conn = self.conn().await?;
         self.scripts.init(&mut conn).await?;
         Ok(())
     }
 
     // Create a new ID for use in the Queue
-    pub(crate) fn new_id(&self) -> Uuid {
+    pub fn new_id(&self) -> Uuid {
         Uuid::new_v4()
     }
 
@@ -39,7 +39,7 @@ impl QueueControl {
     }
 
     /// Set the current status of the queue
-    pub(crate) async fn queue_status(
+    pub async fn queue_status(
         &self,
         prefix: impl Into<String>,
     ) -> Result<(bool, StoreCapacity, usize)> {
@@ -59,13 +59,13 @@ impl QueueControl {
 
         Ok((
             from_redis_bool(enabled, false),
-            StoreCapacity::from(capacity),
+            StoreCapacity::try_from(capacity)?,
             time,
         ))
     }
 
     /// Set the current status of the queue
-    pub(crate) async fn set_queue_status(
+    pub async fn set_queue_status(
         &self,
         prefix: impl Into<String>,
         enabled: bool,
@@ -94,7 +94,7 @@ impl QueueControl {
     }
 
     /// Current size of the queue
-    pub(crate) async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
+    pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
         let mut conn = self.conn().await?;
         let key = format!("{}::queue_enabled", prefix.into());
         let result = conn.get(&key).await?;
@@ -107,7 +107,7 @@ impl QueueControl {
     }
 
     /// Current size of the queue
-    pub(crate) async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
+    pub async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let mut conn = self.conn().await?;
         let key = format!("{}::queue_ids", prefix.into());
         let result = conn.llen(key).await?;
@@ -115,34 +115,34 @@ impl QueueControl {
     }
 
     /// Current capacity of the store
-    pub(crate) async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
+    pub async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
         let mut conn = self.conn().await?;
         let key = format!("{}::store_capacity", prefix.into());
         let result = conn.get(key).await?;
 
         let capacity = match result {
-            Some(r) => StoreCapacity::from(r.parse::<isize>()?),
+            Some(r) => StoreCapacity::try_from(r)?,
             None => StoreCapacity::Unlimited,
         };
         Ok(capacity)
     }
 
     /// Current size of the store
-    pub(crate) async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
+    pub async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let mut conn = self.conn().await?;
         let key = format!("{}::store_ids", prefix.into());
         let result = conn.llen(key).await?;
         Ok(result)
     }
 
-    pub(crate) async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
+    pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
         let mut conn = self.conn().await?;
         let key = format!("{}::waiting_page", prefix.into());
         let result = conn.get(key).await?;
         Ok(result)
     }
 
-    pub(crate) async fn set_waiting_page(
+    pub async fn set_waiting_page(
         &self,
         prefix: impl Into<String>,
         waiting_page: impl Into<String>,
@@ -154,21 +154,21 @@ impl QueueControl {
     }
 
     /// Check that all keys required for syncing the queue/store are available
-    pub(crate) async fn check_sync_keys(&self) -> Result<bool> {
+    pub async fn check_sync_keys(&self) -> Result<bool> {
         let mut conn = self.conn().await?;
         self.scripts.check_sync_keys(&mut conn).await
     }
 
     /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
-    pub(crate) async fn has_ids(&self) -> Result<bool> {
+    pub async fn has_ids(&self) -> Result<bool> {
         let mut conn = self.conn().await?;
         self.scripts.has_ids(&mut conn).await
     }
 
     /// Add a UUID to the queue/store with expiration times, returning queue position
-    pub(crate) async fn id_add(
+    pub async fn id_add(
         &self,
-        prefix: String,
+        prefix: impl Into<String>,
         id: Uuid,
         time: usize,
         validated_expiry: usize,
@@ -189,9 +189,9 @@ impl QueueControl {
 
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
-    pub(crate) async fn id_position(
+    pub async fn id_position(
         &self,
-        prefix: String,
+        prefix: impl Into<String>,
         id: Uuid,
         time: usize,
         validated_expiry: usize,
@@ -211,15 +211,15 @@ impl QueueControl {
     }
 
     /// Remove a given UUID from the queue/store
-    pub(crate) async fn id_remove(&self, prefix: String, id: Uuid) -> Result<()> {
+    pub async fn id_remove(&self, prefix: impl Into<String>, id: Uuid) -> Result<()> {
         let mut conn = self.conn().await?;
         self.scripts.id_remove(&mut conn, prefix, id).await
     }
 
     /// Full queue rotation using scripts in a pipeline
-    pub(crate) async fn rotate_full(
+    pub async fn rotate_full(
         &self,
-        prefix: String,
+        prefix: impl Into<String>,
         batch_size: usize,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
@@ -229,9 +229,9 @@ impl QueueControl {
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
-    pub(crate) async fn rotate_expire(&self, prefix: String) -> Result<QueueRotate> {
+    pub async fn rotate_expire(&self, prefix: impl Into<String>) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts.rotate_expire(&mut conn, prefix).await
+        self.scripts.rotate_expire(&mut conn, prefix.into()).await
     }
 }
 

@@ -25,7 +25,7 @@ use tracing_subscriber::FmtSubscriber;
 use crate::constants::STATIC_ASSETS_DIR;
 use crate::database::create_redis_pool;
 use crate::discovery::UpstreamPoolStream;
-use crate::queue::control::QueueControl;
+use crate::queue::QueueControl;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
 
@@ -39,7 +39,7 @@ fn test_dynamic_upstreams(state: &AppState) {
         info!("Add");
         state
             .upstream_pool
-            .add_upstreams(&vec![
+            .add_upstreams(&[
                 String::from("http://127.0.0.1:63111"),
                 String::from("http://127.0.0.1:63112"),
                 String::from("http://127.0.0.1:63113"),
@@ -51,7 +51,7 @@ fn test_dynamic_upstreams(state: &AppState) {
         info!("Remove");
         state
             .upstream_pool
-            .remove_upstreams(&vec![
+            .remove_upstreams(&[
                 String::from("http://127.0.0.1:63111"),
                 String::from("http://127.0.0.1:63112"),
                 String::from("http://127.0.0.1:63113"),
@@ -63,7 +63,7 @@ fn test_dynamic_upstreams(state: &AppState) {
         info!("Re-add");
         state
             .upstream_pool
-            .add_upstreams(&vec![String::from("http://127.0.0.1:80")])
+            .add_upstreams(&[String::from("http://127.0.0.1:63111")])
             .await;
 
         tokio::time::sleep(Duration::from_secs(1)).await;

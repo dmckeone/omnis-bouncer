@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::queue::control::QueueControl;
+use crate::queue::QueueControl;
 use crate::upstream::UpstreamPool;
 
 #[derive(Debug)]

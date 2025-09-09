@@ -4,14 +4,25 @@ use axum::response::{IntoResponse, Response};
 // Generic Error type for all errors in handlers
 #[derive(Debug)]
 pub enum Error {
-    ScriptError(String),
+    StoreCapacityOutOfRange(isize),
+    RedisScriptUnreadable(String),
     Unknown(anyhow::Error),
 }
 
 // Generic Result type for all results in handlers
 pub type Result<T> = core::result::Result<T, Error>;
 
-fn script_error(error: String) -> Response {
+fn store_capacity_out_of_range(size: isize) -> Response {
+    tracing::error!("store capacity error: {}", size);
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "internal server error".to_string(),
+    )
+        .into_response()
+}
+
+fn redis_script_unreadable(error: String) -> Response {
     tracing::error!("script error: {}", error);
 
     (
@@ -35,7 +46,8 @@ fn internal_server_error(error: anyhow::Error) -> Response {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            Error::ScriptError(e) => script_error(e),
+            Error::StoreCapacityOutOfRange(size) => store_capacity_out_of_range(size),
+            Error::RedisScriptUnreadable(e) => redis_script_unreadable(e),
             Error::Unknown(e) => internal_server_error(e),
         }
     }
@@ -91,6 +103,6 @@ mod tests {
         let bytes = body.collect().await.unwrap().to_bytes();
         let html = String::from_utf8(bytes.to_vec()).unwrap();
 
-        assert_eq!(html, r#"{"code":500,"message":"internal server error"}"#);
+        assert_eq!(html, "internal server error");
     }
 }

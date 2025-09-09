@@ -59,7 +59,7 @@ impl UpstreamPool {
     }
 
     /// Add a vector of upstream URIs to the pool
-    pub async fn add_upstreams(&self, uris: &Vec<String>) {
+    pub async fn add_upstreams(&self, uris: &[String]) {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
         upstreams.add_uris(uris);
@@ -67,7 +67,7 @@ impl UpstreamPool {
     }
 
     /// Remove a vector of upstream URIs from the pool
-    pub async fn remove_upstreams(&self, uris: &Vec<String>) {
+    pub async fn remove_upstreams(&self, uris: &[String]) {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
         upstreams.remove_uris(uris);
@@ -123,7 +123,7 @@ impl Pool {
     fn current_uris(&self) -> Vec<(usize, String)> {
         self.pool
             .iter()
-            .filter(|u| (*u).available == true && (*u).removed == false)
+            .filter(|u| u.available && !u.removed)
             .map(|u| (u.id, u.uri.clone()))
             .collect()
     }
@@ -134,15 +134,14 @@ impl Pool {
             .pool
             .iter_mut()
             .enumerate()
-            .filter(|(_, u)| (*u).available == false || (*u).removed == true)
-            .next();
+            .find(|(_, u)| !u.available || u.removed);
 
         if let Some((idx, upstream)) = item {
             let id = upstream.id;
-            if upstream.removed == true {
+            if upstream.removed {
                 self.remove_pool_index(idx);
                 return PoolPoll::Remove(id);
-            } else if upstream.available == false {
+            } else if !upstream.available {
                 upstream.mark_available();
                 return PoolPoll::Insert(id, upstream.uri.clone());
             }
@@ -163,7 +162,7 @@ impl Pool {
     }
 
     /// Add 1+ URIs to the upstream pool
-    fn add_uris(&mut self, uris: &Vec<String>) {
+    fn add_uris(&mut self, uris: &[String]) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = self.pool.iter().map(|s| s.uri.clone()).collect();
 
@@ -173,12 +172,12 @@ impl Pool {
                 continue;
             }
             self.pool.push(Upstream::new(self.next_id, uri));
-            self.next_id = self.next_id + 1;
+            self.next_id += 1;
         }
     }
 
     /// Remove 1+ of URIs from the service
-    fn remove_uris(&mut self, uris: &Vec<String>) {
+    fn remove_uris(&mut self, uris: &[String]) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = uris.iter().cloned().collect();
 

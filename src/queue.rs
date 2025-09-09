@@ -1,4 +1,6 @@
-pub(crate) mod control;
-pub(crate) mod models;
-pub(crate) mod scripts;
-pub(crate) mod util;
+mod control;
+mod models;
+mod scripts;
+mod util;
+
+pub use self::control::QueueControl;
