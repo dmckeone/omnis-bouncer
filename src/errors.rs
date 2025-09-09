@@ -1,10 +1,13 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use tracing::error;
 
 // Generic Error type for all errors in handlers
 #[derive(Debug)]
 pub enum Error {
-    StoreCapacityOutOfRange(isize),
+    QueueEnabledOutOfRange(String),
+    StoreCapacityOutOfRange(String),
+    QueueSyncTimestampOutOfRange(String),
     RedisScriptUnreadable(String),
     Unknown(anyhow::Error),
 }
@@ -12,44 +15,24 @@ pub enum Error {
 // Generic Result type for all results in handlers
 pub type Result<T> = core::result::Result<T, Error>;
 
-fn store_capacity_out_of_range(size: isize) -> Response {
-    tracing::error!("store capacity error: {}", size);
-
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal server error".to_string(),
-    )
-        .into_response()
-}
-
-fn redis_script_unreadable(error: String) -> Response {
-    tracing::error!("script error: {}", error);
-
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal server error".to_string(),
-    )
-        .into_response()
-}
-
-fn internal_server_error(error: anyhow::Error) -> Response {
-    tracing::error!("unknown error: {}", error);
-
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "internal server error".to_string(),
-    )
-        .into_response()
-}
-
 // Tell axum how to convert `AppError` into a response.
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            Error::StoreCapacityOutOfRange(size) => store_capacity_out_of_range(size),
-            Error::RedisScriptUnreadable(e) => redis_script_unreadable(e),
-            Error::Unknown(e) => internal_server_error(e),
-        }
+            Error::QueueEnabledOutOfRange(size) => error!("queue enabled out of range: {}", size),
+            Error::StoreCapacityOutOfRange(size) => error!("store capacity out of range: {}", size),
+            Error::QueueSyncTimestampOutOfRange(size) => {
+                error!("queue sync timestamp out of range: {}", size)
+            }
+            Error::RedisScriptUnreadable(script) => error!("script unreadable: {}", script),
+            Error::Unknown(error) => error!("unknown error: {:?}", error),
+        };
+
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal server error".to_string(),
+        )
+            .into_response()
     }
 }
 

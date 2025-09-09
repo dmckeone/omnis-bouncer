@@ -17,10 +17,18 @@ impl TryFrom<isize> for StoreCapacity {
 
     fn try_from(size: isize) -> Result<StoreCapacity> {
         match size {
-            ..-1 => Err(Error::StoreCapacityOutOfRange(size)),
+            ..-1 => Err(Error::StoreCapacityOutOfRange(size.to_string())),
             -1 => Ok(StoreCapacity::Unlimited),
             0.. => Ok(StoreCapacity::Sized(size as usize)),
         }
+    }
+}
+
+impl TryFrom<&str> for StoreCapacity {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<StoreCapacity> {
+        StoreCapacity::try_from(value.parse::<isize>()?)
     }
 }
 
@@ -28,7 +36,7 @@ impl TryFrom<String> for StoreCapacity {
     type Error = Error;
 
     fn try_from(value: String) -> Result<StoreCapacity> {
-        StoreCapacity::try_from(value.parse::<isize>()?)
+        StoreCapacity::try_from(value.as_ref())
     }
 }
 
@@ -41,30 +49,264 @@ impl From<StoreCapacity> for isize {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub struct QueueEnabled(pub bool);
+
+impl From<bool> for QueueEnabled {
+    fn from(value: bool) -> Self {
+        QueueEnabled(value)
+    }
+}
+
+impl From<QueueEnabled> for bool {
+    fn from(value: QueueEnabled) -> Self {
+        value.0
+    }
+}
+
+impl TryFrom<&str> for QueueEnabled {
+    type Error = Error;
+    fn try_from(value: &str) -> Result<Self> {
+        match value.trim() {
+            "1" => Ok(Self(true)),
+            "0" => Ok(Self(false)),
+            _ => Err(Error::QueueEnabledOutOfRange(String::from(value))),
+        }
+    }
+}
+
+impl TryFrom<String> for QueueEnabled {
+    type Error = Error;
+    fn try_from(value: String) -> Result<Self> {
+        QueueEnabled::try_from(value.as_ref())
+    }
+}
+
+impl TryFrom<isize> for QueueEnabled {
+    type Error = Error;
+    fn try_from(value: isize) -> Result<Self> {
+        match value {
+            1 => Ok(Self(true)),
+            0 => Ok(Self(false)),
+            _ => Err(Error::QueueEnabledOutOfRange(value.to_string())),
+        }
+    }
+}
+
+impl From<QueueEnabled> for isize {
+    fn from(value: QueueEnabled) -> Self {
+        match value.0 {
+            true => 1,
+            false => 0,
+        }
+    }
+}
+
+impl From<QueueEnabled> for String {
+    fn from(value: QueueEnabled) -> Self {
+        match value.0 {
+            true => String::from("1"),
+            false => String::from("0"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct QueueSyncTimestamp(pub usize);
+
+impl TryFrom<&str> for QueueSyncTimestamp {
+    type Error = Error;
+    fn try_from(value: &str) -> Result<Self> {
+        let parsed = value.trim().parse::<usize>()?;
+        let timestamp = Self(parsed);
+        Ok(timestamp)
+    }
+}
+
+impl TryFrom<String> for QueueSyncTimestamp {
+    type Error = Error;
+    fn try_from(value: String) -> Result<Self> {
+        QueueSyncTimestamp::try_from(value.as_ref())
+    }
+}
+
+impl From<isize> for QueueSyncTimestamp {
+    fn from(value: isize) -> Self {
+        Self(value as usize)
+    }
+}
+
+impl From<usize> for QueueSyncTimestamp {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl From<QueueSyncTimestamp> for usize {
+    fn from(value: QueueSyncTimestamp) -> Self {
+        value.0
+    }
+}
+
 mod test {
     use super::*;
 
-    #[test]
-    fn test_from_isize_error() {
-        let expected: isize = -2;
-        let actual = StoreCapacity::try_from(expected);
-        match actual {
-            Err(Error::StoreCapacityOutOfRange(v)) => assert_eq!(v, expected),
-            _ => panic!("Should have emitted capacity error"),
+    mod store_capacity {
+        use super::*;
+
+        #[test]
+        fn test_store_capacity_from_isize_error() {
+            let expected: isize = -2;
+            let actual = StoreCapacity::try_from(expected);
+            match actual {
+                Err(Error::StoreCapacityOutOfRange(v)) => assert_eq!(v, String::from("-2")),
+                _ => panic!("Should have emitted capacity error"),
+            }
+        }
+
+        #[test]
+        fn test_store_capacity_from_isize_unlimited() {
+            let value: isize = -1;
+            let actual = StoreCapacity::try_from(value).unwrap();
+            assert_eq!(actual, StoreCapacity::Unlimited);
+        }
+
+        #[test]
+        fn test_store_capacity_from_isize_sized() {
+            let value: isize = isize::MAX;
+            let actual = StoreCapacity::try_from(value).unwrap();
+            assert_eq!(actual, StoreCapacity::Sized(isize::MAX as usize));
+        }
+
+        #[test]
+        fn test_store_capacity_from_string_error() {
+            let expected = "-2";
+            let actual = StoreCapacity::try_from(expected);
+            match actual {
+                Err(Error::StoreCapacityOutOfRange(v)) => assert_eq!(v, String::from("-2")),
+                _ => panic!("Should have emitted capacity error"),
+            }
+        }
+
+        #[test]
+        fn test_store_capacity_from_string_unlimited() {
+            let value = "-1";
+            let actual = StoreCapacity::try_from(value).unwrap();
+            assert_eq!(actual, StoreCapacity::Unlimited);
+        }
+
+        #[test]
+        fn test_store_capacity_from_string_sized() {
+            let value = isize::MAX.to_string();
+            let actual = StoreCapacity::try_from(value).unwrap();
+            assert_eq!(actual, StoreCapacity::Sized(isize::MAX as usize));
         }
     }
 
-    #[test]
-    fn test_from_isize_unlimited() {
-        let value: isize = -1;
-        let actual = StoreCapacity::try_from(value).unwrap();
-        assert_eq!(actual, StoreCapacity::Unlimited);
+    mod queue_enabled {
+        use super::*;
+
+        #[test]
+        fn test_isize_from_queue_enabled_false() {
+            assert_eq!(isize::from(QueueEnabled(false)), 0);
+        }
+
+        #[test]
+        fn test_isize_from_queue_enabled_true() {
+            assert_eq!(isize::from(QueueEnabled(true)), 1);
+        }
+
+        #[test]
+        fn test_queue_enabled_from_isize_zero() {
+            assert_eq!(QueueEnabled::try_from(0).unwrap(), QueueEnabled(false));
+        }
+
+        #[test]
+        fn test_queue_enabled_from_isize_one() {
+            assert_eq!(QueueEnabled::try_from(1).unwrap(), QueueEnabled(true));
+        }
+
+        #[test]
+        fn test_queue_enabled_from_isize_error() {
+            match QueueEnabled::try_from(2) {
+                Err(Error::QueueEnabledOutOfRange(_)) => assert!(true),
+                _ => assert!(false),
+            }
+        }
+
+        #[test]
+        fn test_queue_enabled_from_string_zero() {
+            assert_eq!(QueueEnabled::try_from("0").unwrap(), QueueEnabled(false));
+        }
+
+        #[test]
+        fn test_queue_enabled_from_string_one() {
+            assert_eq!(QueueEnabled::try_from("1").unwrap(), QueueEnabled(true));
+        }
+
+        #[test]
+        fn test_queue_enabled_from_string_error() {
+            match QueueEnabled::try_from("2") {
+                Err(Error::QueueEnabledOutOfRange(_)) => assert!(true),
+                _ => assert!(false),
+            }
+        }
+
+        #[test]
+        fn test_string_from_queue_enabled_false() {
+            assert_eq!(String::from(QueueEnabled(false)), "0");
+        }
+
+        #[test]
+        fn test_string_from_queue_enabled_true() {
+            assert_eq!(String::from(QueueEnabled(true)), "1");
+        }
+
+        #[test]
+        fn test_bool_from_queue_enabled_true() {
+            assert_eq!(bool::from(QueueEnabled(true)), true);
+        }
+
+        #[test]
+        fn test_bool_from_queue_enabled_false() {
+            assert_eq!(bool::from(QueueEnabled(false)), false);
+        }
     }
 
-    #[test]
-    fn test_from_isize_max() {
-        let value: isize = isize::MAX;
-        let actual = StoreCapacity::try_from(value).unwrap();
-        assert_eq!(actual, StoreCapacity::Sized(isize::MAX as usize));
+    mod queue_sync_timestamp {
+        use super::*;
+
+        #[test]
+        fn test_usize_from_queue_sync_timestamp() {
+            assert_eq!(usize::from(QueueSyncTimestamp(123)), 123);
+        }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_isize() {
+            let value: isize = 456;
+            assert_eq!(QueueSyncTimestamp::from(value), QueueSyncTimestamp(456));
+        }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_usize() {
+            let value: usize = 123;
+            assert_eq!(QueueSyncTimestamp::from(value), QueueSyncTimestamp(123));
+        }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_string() {
+            assert_eq!(
+                QueueSyncTimestamp::try_from("123").unwrap(),
+                QueueSyncTimestamp(123)
+            );
+        }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_string_error() {
+            match QueueSyncTimestamp::try_from("abc") {
+                Err(_) => assert!(true),
+                _ => panic!("Should've failed converting 'abc' to a timestamp"),
+            };
+        }
     }
 }

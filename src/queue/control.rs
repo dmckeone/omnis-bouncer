@@ -4,9 +4,8 @@ use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
-use crate::queue::models::{QueueRotate, StoreCapacity};
+use crate::queue::models::{QueueEnabled, QueueRotate, QueueSyncTimestamp, StoreCapacity};
 use crate::queue::scripts::Scripts;
-use crate::queue::util::{from_redis_bool, to_redis_bool};
 
 pub struct QueueControl {
     pool: RedisPool,
@@ -42,7 +41,7 @@ impl QueueControl {
     pub async fn queue_status(
         &self,
         prefix: impl Into<String>,
-    ) -> Result<(bool, StoreCapacity, usize)> {
+    ) -> Result<(QueueEnabled, StoreCapacity, QueueSyncTimestamp)> {
         let prefix = prefix.into();
         let enabled_key = format!("{}::queue_enabled", &prefix);
         let capacity_key = format!("{}::store_capacity", &prefix);
@@ -50,28 +49,41 @@ impl QueueControl {
 
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
-        let (enabled, capacity, time): (isize, isize, usize) = pipe()
+        let result: (Option<isize>, Option<isize>, Option<usize>) = pipe()
+            .atomic()
             .get(enabled_key)
             .get(capacity_key)
             .get(time_key)
             .query_async(&mut conn)
             .await?;
 
-        Ok((
-            from_redis_bool(enabled, false),
-            StoreCapacity::try_from(capacity)?,
-            time,
-        ))
+        let enabled = match result.0 {
+            Some(enabled) => QueueEnabled::try_from(enabled)?,
+            None => QueueEnabled(false),
+        };
+        let capacity = match result.1 {
+            Some(capacity) => StoreCapacity::try_from(capacity)?,
+            None => StoreCapacity::Unlimited,
+        };
+        let timestamp = match result.2 {
+            Some(timestamp) => QueueSyncTimestamp::try_from(timestamp)?,
+            None => QueueSyncTimestamp(0),
+        };
+
+        Ok((enabled, capacity, timestamp))
     }
 
     /// Set the current status of the queue
     pub async fn set_queue_status(
         &self,
         prefix: impl Into<String>,
-        enabled: bool,
-        capacity: StoreCapacity,
+        enabled: impl Into<QueueEnabled>,
+        capacity: impl Into<StoreCapacity>,
     ) -> Result<()> {
         let prefix = prefix.into();
+        let enabled = enabled.into();
+        let capacity = capacity.into();
+
         let enabled_key = format!("{}::queue_enabled", &prefix);
         let capacity_key = format!("{}::store_capacity", &prefix);
         let time_key = format!("{}::queue_sync_timestamp", &prefix);
@@ -80,13 +92,10 @@ impl QueueControl {
         let current_time = current_time(&mut conn).await?;
 
         // Set all values in single pipeline to ensure atomic consistency
-        let _: String = pipe()
-            .set(enabled_key, to_redis_bool(enabled))
-            .ignore()
-            .set::<String, isize>(capacity_key, capacity.into())
-            .ignore()
-            .set(time_key, current_time)
-            .ignore()
+        let _: (Option<String>, Option<String>, Option<String>) = pipe()
+            .set(enabled_key, isize::from(enabled))
+            .set(capacity_key, isize::from(capacity))
+            .set(time_key, usize::from(current_time))
             .query_async(&mut conn)
             .await?;
 
@@ -97,11 +106,14 @@ impl QueueControl {
     pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
         let mut conn = self.conn().await?;
         let key = format!("{}::queue_enabled", prefix.into());
-        let result = conn.get(&key).await?;
+        let enabled = conn.get(&key).await?;
 
         let default = false;
-        match result {
-            Some(r) => Ok(from_redis_bool(r.parse()?, default)),
+        match enabled {
+            Some(e) => match QueueEnabled::try_from(e) {
+                Ok(qe) => Ok(qe.into()),
+                Err(_) => Ok(default),
+            },
             None => Ok(default),
         }
     }
@@ -239,8 +251,22 @@ impl QueueControl {
 mod test {
     use super::*;
     use crate::database::test::create_test_pool;
-    use tracing::warn;
+    use redis::AsyncTypedCommands;
+    use tracing::{error, warn};
     use tracing_test::traced_test;
+
+    fn test_queue() -> QueueControl {
+        let Some(pool) = create_test_pool() else {
+            panic!()
+        };
+
+        match QueueControl::new(pool) {
+            Ok(pool) => pool,
+            Err(e) => {
+                panic!("QueueControl::new Error: {:?}", e);
+            }
+        }
+    }
 
     #[test]
     #[traced_test]
@@ -258,12 +284,7 @@ mod test {
     #[tokio::test]
     #[traced_test]
     async fn test_init() {
-        let Some(pool) = create_test_pool() else {
-            return;
-        };
-
-        let queue =
-            QueueControl::new(pool).unwrap_or_else(|e| panic!("QueueControl::new Error: {:?}", e));
+        let queue = test_queue();
 
         match queue.init().await {
             Ok(_) => assert!(true),
@@ -271,6 +292,82 @@ mod test {
                 warn!("QueueControl::new Error: {:?}", e);
                 assert!(false)
             }
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_queue_status_read() {
+        let queue = test_queue();
+        let pool = &queue.pool;
+
+        let prefix = "test_queue_status_read";
+        let expected_enabled: bool = true;
+        let raw_capacity: isize = 4321;
+        let expected_capacity = StoreCapacity::try_from(raw_capacity).unwrap();
+        let expected_timestamp: usize = 1757438630;
+
+        let mut conn = get_connection(pool).await.unwrap();
+        conn.set(format!("{}::queue_enabled", prefix), expected_enabled)
+            .await
+            .unwrap();
+        conn.set(format!("{}::store_capacity", prefix), raw_capacity)
+            .await
+            .unwrap();
+        conn.set(
+            format!("{}::queue_sync_timestamp", prefix),
+            expected_timestamp,
+        )
+        .await
+        .unwrap();
+
+        let (enabled, capacity, timestamp) = queue.queue_status(prefix).await.unwrap();
+        assert_eq!(enabled, QueueEnabled::from(expected_enabled));
+        assert_eq!(capacity, StoreCapacity::from(expected_capacity));
+        assert_eq!(timestamp, QueueSyncTimestamp::from(expected_timestamp));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_queue_status_default() {
+        let queue = test_queue();
+        let pool = &queue.pool;
+
+        let prefix = "test_queue_status_default";
+
+        let mut conn = get_connection(pool).await.unwrap();
+        conn.del(format!("{}::queue_enabled", prefix))
+            .await
+            .unwrap();
+        conn.del(format!("{}::store_capacity", prefix))
+            .await
+            .unwrap();
+        conn.del(format!("{}::queue_sync_timestamp", prefix))
+            .await
+            .unwrap();
+
+        let status = queue
+            .queue_status(prefix)
+            .await
+            .unwrap_or_else(|e| panic!("Error: {:?}", e));
+
+        assert_eq!(status.0, QueueEnabled(false));
+        assert_eq!(status.1, StoreCapacity::Unlimited);
+        assert_eq!(status.2, QueueSyncTimestamp(0));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_set_queue_status() {
+        let queue = test_queue();
+
+        let prefix = "test_set_queue_status";
+
+        let enabled = QueueEnabled(true);
+        let capacity = StoreCapacity::Sized(50);
+
+        if let Err(e) = queue.set_queue_status(prefix, enabled, capacity).await {
+            panic!("Failed to set queue: {:?}", e)
         }
     }
 }
