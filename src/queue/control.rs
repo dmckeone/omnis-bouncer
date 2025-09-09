@@ -235,4 +235,46 @@ impl QueueControl {
     }
 }
 
-mod test {}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    use tracing::warn;
+
+    use crate::database::test::create_test_pool;
+
+    #[test]
+    fn test_construct() {
+        let pool = match create_test_pool() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Pool error: {}", e);
+                return;
+            }
+        };
+
+        match QueueControl::new(pool) {
+            Ok(_) => assert!(true),
+            _ => panic!("QueueControl::new Error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_init() {
+        let pool = match create_test_pool() {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Pool error: {}", e);
+                return;
+            }
+        };
+
+        let queue =
+            QueueControl::new(pool).unwrap_or_else(|e| panic!("QueueControl::new Error: {:?}", e));
+
+        match queue.init().await {
+            Ok(_) => assert!(true),
+            _ => panic!("QueueControl::new Error"),
+        }
+    }
+}

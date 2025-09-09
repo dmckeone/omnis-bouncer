@@ -260,6 +260,14 @@ mod test {
     use super::*;
 
     #[test]
+    fn test_construct() {
+        match Scripts::new() {
+            Ok(_) => assert!(true),
+            Err(e) => panic!("Script::new Error: {:?}", e),
+        }
+    }
+
+    #[test]
     fn test_read_scripts() {
         let scripts = &[
             "check_sync_keys",
