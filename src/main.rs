@@ -25,7 +25,7 @@ use tracing_subscriber::FmtSubscriber;
 use crate::constants::STATIC_ASSETS_DIR;
 use crate::database::create_redis_pool;
 use crate::discovery::UpstreamPoolStream;
-use crate::queue::QueueControl;
+use crate::queue::control::QueueControl;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
 
@@ -77,7 +77,7 @@ fn test_dynamic_upstreams(state: &AppState) {
 async fn main() {
     // Initialize tracing
     FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::DEBUG)
         .with_target(false)
         .compact()
         .init();
