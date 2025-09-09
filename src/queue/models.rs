@@ -6,7 +6,7 @@ pub struct QueueRotate {
     pub queue_removed: usize,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum StoreCapacity {
     Sized(usize),
     Unlimited,
@@ -49,7 +49,7 @@ impl From<StoreCapacity> for isize {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QueueEnabled(pub bool);
 
 impl From<bool> for QueueEnabled {
@@ -111,7 +111,7 @@ impl From<QueueEnabled> for String {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct QueueSyncTimestamp(pub usize);
 
 impl TryFrom<&str> for QueueSyncTimestamp {

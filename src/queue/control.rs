@@ -252,20 +252,21 @@ mod test {
     use super::*;
     use crate::database::test::create_test_pool;
     use redis::AsyncTypedCommands;
-    use tracing::{error, warn};
     use tracing_test::traced_test;
 
     fn test_queue() -> QueueControl {
-        let Some(pool) = create_test_pool() else {
-            panic!()
-        };
+        let pool = create_test_pool().expect("Failed to create test pool");
+        QueueControl::new(pool).expect("Failed to create test QueueControl")
+    }
 
-        match QueueControl::new(pool) {
-            Ok(pool) => pool,
-            Err(e) => {
-                panic!("QueueControl::new Error: {:?}", e);
-            }
-        }
+    async fn test_queue_conn() -> (QueueControl, Connection) {
+        let queue = test_queue();
+        let pool = queue.pool.clone();
+        let conn = get_connection(&pool)
+            .await
+            .expect("Redis connection failed");
+
+        (queue, conn)
     }
 
     #[test]
@@ -275,81 +276,75 @@ mod test {
             return;
         };
 
-        match QueueControl::new(pool) {
-            Ok(_) => assert!(true),
-            _ => panic!("QueueControl::new Error"),
-        }
+        QueueControl::new(pool).expect("QueueControl::new() failed");
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_init() {
         let queue = test_queue();
-
-        match queue.init().await {
-            Ok(_) => assert!(true),
-            Err(e) => {
-                warn!("QueueControl::new Error: {:?}", e);
-                assert!(false)
-            }
-        }
+        queue.init().await.expect("QueueControl::init() failed");
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_queue_status_read() {
-        let queue = test_queue();
-        let pool = &queue.pool;
-
         let prefix = "test_queue_status_read";
+
         let expected_enabled: bool = true;
         let raw_capacity: isize = 4321;
         let expected_capacity = StoreCapacity::try_from(raw_capacity).unwrap();
         let expected_timestamp: usize = 1757438630;
 
-        let mut conn = get_connection(pool).await.unwrap();
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Prepare keys
         conn.set(format!("{}::queue_enabled", prefix), expected_enabled)
             .await
-            .unwrap();
+            .expect("Failed to set ::queue_enabled");
+
         conn.set(format!("{}::store_capacity", prefix), raw_capacity)
             .await
-            .unwrap();
+            .expect("Failed to set ::store_capacity");
+
         conn.set(
             format!("{}::queue_sync_timestamp", prefix),
             expected_timestamp,
         )
         .await
-        .unwrap();
+        .expect("Failed to set ::queue_sync_timestamp");
 
-        let (enabled, capacity, timestamp) = queue.queue_status(prefix).await.unwrap();
-        assert_eq!(enabled, QueueEnabled::from(expected_enabled));
-        assert_eq!(capacity, StoreCapacity::from(expected_capacity));
-        assert_eq!(timestamp, QueueSyncTimestamp::from(expected_timestamp));
+        // Read status
+        let result = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to read queue status");
+
+        assert_eq!(result.0, QueueEnabled::from(expected_enabled));
+        assert_eq!(result.1, StoreCapacity::from(expected_capacity));
+        assert_eq!(result.2, QueueSyncTimestamp::from(expected_timestamp));
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_queue_status_default() {
-        let queue = test_queue();
-        let pool = &queue.pool;
-
         let prefix = "test_queue_status_default";
 
-        let mut conn = get_connection(pool).await.unwrap();
-        conn.del(format!("{}::queue_enabled", prefix))
-            .await
-            .unwrap();
-        conn.del(format!("{}::store_capacity", prefix))
-            .await
-            .unwrap();
-        conn.del(format!("{}::queue_sync_timestamp", prefix))
-            .await
-            .unwrap();
+        let (queue, mut conn) = test_queue_conn().await;
 
+        // Prepare keys
+        for key in &["queue_enabled", "store_capacity", "queue_sync_timestamp"] {
+            let full_key = format!("{}::{}", prefix, key);
+            conn.del(&full_key)
+                .await
+                .expect(format!("Failed to delete: {}", full_key).as_ref());
+        }
+
+        // Read status
         let status = queue
             .queue_status(prefix)
             .await
-            .unwrap_or_else(|e| panic!("Error: {:?}", e));
+            .expect("Failed to get queue status");
 
         assert_eq!(status.0, QueueEnabled(false));
         assert_eq!(status.1, StoreCapacity::Unlimited);
@@ -359,15 +354,24 @@ mod test {
     #[tokio::test]
     #[traced_test]
     async fn test_set_queue_status() {
-        let queue = test_queue();
-
         let prefix = "test_set_queue_status";
 
         let enabled = QueueEnabled(true);
         let capacity = StoreCapacity::Sized(50);
 
-        if let Err(e) = queue.set_queue_status(prefix, enabled, capacity).await {
-            panic!("Failed to set queue: {:?}", e)
-        }
+        let queue = test_queue();
+        queue
+            .set_queue_status(prefix, enabled.clone(), capacity.clone())
+            .await
+            .expect("Failed to read queue");
+
+        let status = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to get queue status");
+
+        assert_eq!(status.0, enabled);
+        assert_eq!(status.1, capacity);
+        assert!(status.2.0 > 0);
     }
 }

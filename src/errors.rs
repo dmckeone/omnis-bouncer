@@ -76,10 +76,10 @@ mod tests {
                 Request::builder()
                     .uri("/anyhow_error")
                     .body(Body::empty())
-                    .unwrap(),
+                    .expect("Request builder failed"),
             )
             .await
-            .unwrap();
+            .expect("Axum app build failed");
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = response.into_body();
