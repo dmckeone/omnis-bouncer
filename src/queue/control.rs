@@ -4,7 +4,9 @@ use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
-use crate::queue::models::{QueueEnabled, QueueRotate, QueueSyncTimestamp, StoreCapacity};
+use crate::queue::models::{
+    QueueEnabled, QueueRotate, QueueSettings, QueueStatus, QueueSyncTimestamp, StoreCapacity,
+};
 use crate::queue::scripts::Scripts;
 
 pub struct QueueControl {
@@ -38,10 +40,55 @@ impl QueueControl {
     }
 
     /// Set the current status of the queue
-    pub async fn queue_status(
-        &self,
-        prefix: impl Into<String>,
-    ) -> Result<(QueueEnabled, StoreCapacity, QueueSyncTimestamp)> {
+    pub async fn queue_status(&self, prefix: impl Into<String>) -> Result<QueueStatus> {
+        let prefix = prefix.into();
+
+        let enabled_key = format!("{}:queue_enabled", &prefix);
+        let capacity_key = format!("{}:store_capacity", &prefix);
+        let store_ids_key = format!("{}:store_ids", &prefix);
+        let queue_ids_key = format!("{}:queue_ids", &prefix);
+        let time_key = format!("{}:queue_sync_timestamp", &prefix);
+
+        // Set all values in single pipeline to ensure atomic consistency
+        let mut conn = self.conn().await?;
+        let result: (
+            Option<isize>,
+            Option<isize>,
+            Option<usize>,
+            Option<usize>,
+            Option<isize>,
+        ) = pipe()
+            .atomic()
+            .get(enabled_key)
+            .get(capacity_key)
+            .scard(store_ids_key)
+            .llen(queue_ids_key)
+            .get(time_key)
+            .query_async(&mut conn)
+            .await?;
+
+        let status = QueueStatus {
+            enabled: match result.0 {
+                Some(enabled) => QueueEnabled::try_from(enabled)?.into(),
+                None => false,
+            },
+            capacity: match result.1 {
+                Some(capacity) => StoreCapacity::try_from(capacity)?,
+                None => StoreCapacity::Unlimited,
+            },
+            store_size: result.2.unwrap_or_else(|| 0),
+            queue_size: result.3.unwrap_or_else(|| 0),
+            sync_timestamp: match result.4 {
+                Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
+                None => 0,
+            },
+        };
+
+        Ok(status)
+    }
+
+    /// Set the current status of the queue
+    pub async fn queue_settings(&self, prefix: impl Into<String>) -> Result<QueueSettings> {
         let prefix = prefix.into();
 
         let enabled_key = format!("{}:queue_enabled", &prefix);
@@ -58,24 +105,26 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        let enabled = match result.0 {
-            Some(enabled) => QueueEnabled::try_from(enabled)?,
-            None => QueueEnabled(false),
-        };
-        let capacity = match result.1 {
-            Some(capacity) => StoreCapacity::try_from(capacity)?,
-            None => StoreCapacity::Unlimited,
-        };
-        let timestamp = match result.2 {
-            Some(timestamp) => QueueSyncTimestamp::from(timestamp),
-            None => QueueSyncTimestamp(0),
+        let settings = QueueSettings {
+            enabled: match result.0 {
+                Some(enabled) => QueueEnabled::try_from(enabled)?.into(),
+                None => false,
+            },
+            capacity: match result.1 {
+                Some(capacity) => StoreCapacity::try_from(capacity)?,
+                None => StoreCapacity::Unlimited,
+            },
+            sync_timestamp: match result.2 {
+                Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
+                None => 0,
+            },
         };
 
-        Ok((enabled, capacity, timestamp))
+        Ok(settings)
     }
 
     /// Set the current status of the queue
-    pub async fn set_queue_status(
+    pub async fn set_queue_settings(
         &self,
         prefix: impl Into<String>,
         enabled: impl Into<QueueEnabled>,
@@ -309,6 +358,46 @@ mod test {
         }
     }
 
+    async fn add_queue_ids(
+        prefix: impl Into<String>,
+        queue: &QueueControl,
+        conn: &mut Connection,
+        count: usize,
+    ) {
+        let prefix = prefix.into();
+
+        let key = format!("{}:queue_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let ids = generate_ids(&queue, count);
+
+        conn.lpush(&key, &ids)
+            .await
+            .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
+    }
+
+    async fn add_store_ids(
+        prefix: impl Into<String>,
+        queue: &QueueControl,
+        conn: &mut Connection,
+        count: usize,
+    ) {
+        let prefix = prefix.into();
+
+        let key = format!("{}:store_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let ids = generate_ids(&queue, count);
+
+        conn.sadd(&key, &ids)
+            .await
+            .expect(format!("Failed to store ids: {:?}", ids).as_ref());
+    }
+
     async fn test_queue_conn() -> (QueueControl, Connection) {
         let queue = test_queue();
         let pool = queue.pool.clone();
@@ -338,8 +427,42 @@ mod test {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_queue_status_read() {
+    async fn test_queue_status() {
         let prefix = "test_queue_status_read";
+
+        let expected_enabled: bool = true;
+        let raw_capacity: isize = 4321;
+        let expected_capacity = StoreCapacity::try_from(raw_capacity).unwrap();
+        let expected_store_size = 2;
+        let expected_queue_size = 5;
+        let expected_timestamp: usize = 1757438630;
+
+        let (queue, mut conn) = test_queue_conn().await;
+        add_store_ids(prefix, &queue, &mut conn, expected_store_size).await;
+        add_queue_ids(prefix, &queue, &mut conn, expected_queue_size).await;
+
+        queue
+            .set_queue_settings(prefix, expected_enabled, expected_capacity.clone())
+            .await
+            .expect("QueueControl::set_queue_settings failed");
+
+        // Read status
+        let result = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to read queue status");
+
+        assert_eq!(result.enabled, expected_enabled);
+        assert_eq!(result.capacity, expected_capacity);
+        assert_eq!(result.store_size, expected_store_size);
+        assert_eq!(result.queue_size, expected_queue_size);
+        assert!(result.sync_timestamp > 0);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_queue_settings() {
+        let prefix = "test_queue_settings_read";
 
         let expected_enabled: bool = true;
         let raw_capacity: isize = 4321;
@@ -366,19 +489,19 @@ mod test {
 
         // Read status
         let result = queue
-            .queue_status(prefix)
+            .queue_settings(prefix)
             .await
             .expect("Failed to read queue status");
 
-        assert_eq!(result.0, QueueEnabled::from(expected_enabled));
-        assert_eq!(result.1, StoreCapacity::from(expected_capacity));
-        assert_eq!(result.2, QueueSyncTimestamp::from(expected_timestamp));
+        assert_eq!(result.enabled, expected_enabled);
+        assert_eq!(result.capacity, StoreCapacity::from(expected_capacity));
+        assert_eq!(result.sync_timestamp, expected_timestamp);
     }
 
     #[tokio::test]
     #[traced_test]
-    async fn test_queue_status_default() {
-        let prefix = "test_queue_status_default";
+    async fn test_queue_settings_default() {
+        let prefix = "test_queue_settings_default";
 
         let (queue, mut conn) = test_queue_conn().await;
 
@@ -392,37 +515,37 @@ mod test {
 
         // Read status
         let status = queue
-            .queue_status(prefix)
+            .queue_settings(prefix)
             .await
             .expect("Failed to get queue status");
 
-        assert_eq!(status.0, QueueEnabled(false));
-        assert_eq!(status.1, StoreCapacity::Unlimited);
-        assert_eq!(status.2, QueueSyncTimestamp(0));
+        assert_eq!(status.enabled, false);
+        assert_eq!(status.capacity, StoreCapacity::Unlimited);
+        assert_eq!(status.sync_timestamp, 0);
     }
 
     #[tokio::test]
     #[traced_test]
-    async fn test_set_queue_status() {
+    async fn test_set_queue_settings() {
         let prefix = "test_set_queue_status";
 
-        let enabled = QueueEnabled(true);
+        let enabled = true;
         let capacity = StoreCapacity::Sized(50);
 
         let queue = test_queue();
         queue
-            .set_queue_status(prefix, enabled.clone(), capacity.clone())
+            .set_queue_settings(prefix, enabled, capacity.clone())
             .await
             .expect("Failed to read queue");
 
         let status = queue
-            .queue_status(prefix)
+            .queue_settings(prefix)
             .await
             .expect("Failed to get queue status");
 
-        assert_eq!(status.0, enabled);
-        assert_eq!(status.1, capacity);
-        assert!(status.2.0 > 0);
+        assert_eq!(status.enabled, enabled);
+        assert_eq!(status.capacity, capacity);
+        assert!(status.sync_timestamp > 0);
     }
 
     #[tokio::test]
@@ -635,18 +758,7 @@ mod test {
         let prefix = "test_has_ids_true_queue";
 
         let (queue, mut conn) = test_queue_conn().await;
-
-        let key = format!("{}:queue_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
-
-        let count = 1;
-        let ids = generate_ids(&queue, count);
-
-        conn.lpush(&key, &ids)
-            .await
-            .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
+        add_queue_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
 
@@ -659,18 +771,7 @@ mod test {
         let prefix = "test_has_ids_true_store";
 
         let (queue, mut conn) = test_queue_conn().await;
-
-        let key = format!("{}:store_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
-
-        let count = 1;
-        let ids = generate_ids(&queue, count);
-
-        conn.sadd(&key, &ids)
-            .await
-            .expect(format!("Failed to store ids: {:?}", ids).as_ref());
+        add_store_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
@@ -682,30 +783,8 @@ mod test {
         let prefix = "test_has_ids_true_both";
 
         let (queue, mut conn) = test_queue_conn().await;
-
-        let key = format!("{}:store_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
-
-        let count = 1;
-        let ids = generate_ids(&queue, count);
-
-        conn.sadd(&key, &ids)
-            .await
-            .expect(format!("Failed to store ids: {:?}", ids).as_ref());
-
-        let key = format!("{}:queue_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
-
-        let count = 1;
-        let ids = generate_ids(&queue, count);
-
-        conn.lpush(&key, &ids)
-            .await
-            .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
+        add_store_ids(prefix, &queue, &mut conn, 1).await;
+        add_queue_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
@@ -717,7 +796,6 @@ mod test {
         let prefix = "test_has_ids_false";
 
         let (queue, mut conn) = test_queue_conn().await;
-
         clear_store(prefix, &mut conn).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
@@ -734,7 +812,7 @@ mod test {
         // Clear store and initialize store capacity to 1
         clear_store(prefix, &mut conn).await;
         queue
-            .set_queue_status(prefix, true, StoreCapacity::Sized(1))
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
             .await
             .expect("Failed to set queue status");
 

@@ -1,5 +1,19 @@
 use crate::errors::{Error, Result};
 
+pub struct QueueSettings {
+    pub enabled: bool,
+    pub capacity: StoreCapacity,
+    pub sync_timestamp: usize,
+}
+
+pub struct QueueStatus {
+    pub enabled: bool,
+    pub capacity: StoreCapacity,
+    pub queue_size: usize,
+    pub store_size: usize,
+    pub sync_timestamp: usize,
+}
+
 pub struct QueueRotate {
     pub store_removed: usize,
     pub moved: usize,
