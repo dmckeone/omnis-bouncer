@@ -28,7 +28,7 @@ Redis database, using the same functions
 ## Internal State Tracking
 
 * **Store**
-    * `::store_ids`: `LIST` - Ordered list of IDs within the store
+    * `::store_ids`: `SET` - Set of IDs within the store
     * `::store_expiry_secs`: `HASH` - Hash map (**key**: ID, **value**: store timeout in seconds)
 * **Queue**
     * `::queue_ids`: `LIST` - Ordered list of IDs within the queue

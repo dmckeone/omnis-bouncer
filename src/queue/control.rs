@@ -43,6 +43,7 @@ impl QueueControl {
         prefix: impl Into<String>,
     ) -> Result<(QueueEnabled, StoreCapacity, QueueSyncTimestamp)> {
         let prefix = prefix.into();
+
         let enabled_key = format!("{}::queue_enabled", &prefix);
         let capacity_key = format!("{}::store_capacity", &prefix);
         let time_key = format!("{}::queue_sync_timestamp", &prefix);
@@ -106,8 +107,9 @@ impl QueueControl {
     pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
         let prefix = prefix.into();
 
-        let mut conn = self.conn().await?;
         let key = format!("{}::queue_enabled", prefix);
+
+        let mut conn = self.conn().await?;
         let enabled = conn.get(&key).await?;
 
         let default = false;
@@ -122,16 +124,23 @@ impl QueueControl {
 
     /// Current size of the queue
     pub async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
+        let prefix = prefix.into();
+
+        let key = format!("{}::queue_ids", prefix);
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::queue_ids", prefix.into());
         let result = conn.llen(key).await?;
+
         Ok(result)
     }
 
     /// Current capacity of the store
     pub async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
+        let prefix = prefix.into();
+
+        let key = format!("{}::store_capacity", prefix);
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::store_capacity", prefix.into());
         let result = conn.get(key).await?;
 
         let capacity = match result {
@@ -143,16 +152,24 @@ impl QueueControl {
 
     /// Current size of the store
     pub async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
+        let prefix = prefix.into();
+
+        let key = format!("{}::store_ids", prefix);
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::store_ids", prefix.into());
-        let result = conn.llen(key).await?;
+        let result = conn.scard(key).await?;
+
         Ok(result)
     }
 
     pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
+        let prefix = prefix.into();
+
+        let key = format!("{}::waiting_page", prefix);
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::waiting_page", prefix.into());
         let result = conn.get(key).await?;
+
         Ok(result)
     }
 
@@ -161,9 +178,14 @@ impl QueueControl {
         prefix: impl Into<String>,
         waiting_page: impl Into<String>,
     ) -> Result<()> {
+        let prefix = prefix.into();
+        let waiting_page = waiting_page.into();
+
+        let key = format!("{}::waiting_page", prefix);
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::waiting_page", prefix.into());
-        conn.set(key, waiting_page.into()).await?;
+        conn.set(key, waiting_page).await?;
+
         Ok(())
     }
 
@@ -174,9 +196,9 @@ impl QueueControl {
     }
 
     /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
-    pub async fn has_ids(&self) -> Result<bool> {
+    pub async fn has_ids(&self, prefix: impl Into<String>) -> Result<bool> {
         let mut conn = self.conn().await?;
-        self.scripts.has_ids(&mut conn).await
+        self.scripts.has_ids(&mut conn, prefix).await
     }
 
     /// Add a UUID to the queue/store with expiration times, returning queue position
@@ -245,7 +267,7 @@ impl QueueControl {
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
     pub async fn rotate_expire(&self, prefix: impl Into<String>) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts.rotate_expire(&mut conn, prefix.into()).await
+        self.scripts.rotate_expire(&mut conn, prefix).await
     }
 }
 
@@ -499,7 +521,7 @@ mod test {
         let count = 4;
         let ids = generate_ids(&queue, count);
 
-        conn.lpush(&key, &ids)
+        conn.sadd(&key, &ids)
             .await
             .expect(format!("Failed to push ids: {:?}", ids).as_ref());
 
@@ -587,5 +609,108 @@ mod test {
             .expect("Failed to call check_sync_keys");
 
         assert_eq!(actual, true);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_has_ids_true_queue() {
+        let prefix = "test_has_ids_true_queue";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}:queue_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 1;
+        let ids = generate_ids(&queue, count);
+
+        conn.lpush(&key, &ids)
+            .await
+            .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
+
+        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
+
+        assert!(actual);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_has_ids_true_store() {
+        let prefix = "test_has_ids_true_store";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}:store_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 1;
+        let ids = generate_ids(&queue, count);
+
+        conn.sadd(&key, &ids)
+            .await
+            .expect(format!("Failed to store ids: {:?}", ids).as_ref());
+
+        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
+        assert_eq!(actual, true);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_has_ids_true_both() {
+        let prefix = "test_has_ids_true_both";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}:store_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 1;
+        let ids = generate_ids(&queue, count);
+
+        conn.sadd(&key, &ids)
+            .await
+            .expect(format!("Failed to store ids: {:?}", ids).as_ref());
+
+        let key = format!("{}:queue_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 1;
+        let ids = generate_ids(&queue, count);
+
+        conn.lpush(&key, &ids)
+            .await
+            .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
+
+        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
+        assert_eq!(actual, true);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_has_ids_false() {
+        let prefix = "test_has_ids_false";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}:store_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let key = format!("{}:queue_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
+        assert_eq!(actual, false);
     }
 }

@@ -78,8 +78,9 @@ impl Scripts {
     }
 
     /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
-    pub async fn has_ids(&self, conn: &mut Connection) -> Result<bool> {
-        match self.has_ids.invoke_async(conn).await? {
+    pub async fn has_ids(&self, conn: &mut Connection, prefix: impl Into<String>) -> Result<bool> {
+        let prefix = prefix.into();
+        match self.has_ids.arg(&prefix).invoke_async(conn).await? {
             1 => Ok(true),
             0 => Ok(false),
             val => {
