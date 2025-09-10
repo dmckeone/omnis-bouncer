@@ -66,7 +66,7 @@ impl QueueControl {
             None => StoreCapacity::Unlimited,
         };
         let timestamp = match result.2 {
-            Some(timestamp) => QueueSyncTimestamp::try_from(timestamp)?,
+            Some(timestamp) => QueueSyncTimestamp::from(timestamp),
             None => QueueSyncTimestamp(0),
         };
 
@@ -95,7 +95,7 @@ impl QueueControl {
         let _: (Option<String>, Option<String>, Option<String>) = pipe()
             .set(enabled_key, isize::from(enabled))
             .set(capacity_key, isize::from(capacity))
-            .set(time_key, usize::from(current_time))
+            .set(time_key, current_time)
             .query_async(&mut conn)
             .await?;
 
@@ -104,8 +104,10 @@ impl QueueControl {
 
     /// Current size of the queue
     pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
+        let prefix = prefix.into();
+
         let mut conn = self.conn().await?;
-        let key = format!("{}::queue_enabled", prefix.into());
+        let key = format!("{}::queue_enabled", prefix);
         let enabled = conn.get(&key).await?;
 
         let default = false;
@@ -166,9 +168,9 @@ impl QueueControl {
     }
 
     /// Check that all keys required for syncing the queue/store are available
-    pub async fn check_sync_keys(&self) -> Result<bool> {
+    pub async fn check_sync_keys(&self, prefix: impl Into<String>) -> Result<bool> {
         let mut conn = self.conn().await?;
-        self.scripts.check_sync_keys(&mut conn).await
+        self.scripts.check_sync_keys(&mut conn, prefix).await
     }
 
     /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
@@ -257,6 +259,14 @@ mod test {
     fn test_queue() -> QueueControl {
         let pool = create_test_pool().expect("Failed to create test pool");
         QueueControl::new(pool).expect("Failed to create test QueueControl")
+    }
+
+    fn generate_ids(queue: &QueueControl, count: usize) -> Vec<String> {
+        let mut vec = Vec::new();
+        for _ in 0..count {
+            vec.push(queue.new_id().to_string());
+        }
+        vec
     }
 
     async fn test_queue_conn() -> (QueueControl, Connection) {
@@ -373,5 +383,209 @@ mod test {
         assert_eq!(status.0, enabled);
         assert_eq!(status.1, capacity);
         assert!(status.2.0 > 0);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_queue_enabled() {
+        let prefix = "test_queue_enabled";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}::queue_enabled", &prefix);
+        conn.set(&key, 1)
+            .await
+            .expect(format!("Failed to set {}", key).as_ref());
+
+        let actual = queue
+            .queue_enabled(prefix)
+            .await
+            .expect("Failed to call queue_enabled");
+
+        assert_eq!(actual, true);
+
+        conn.set(&key, 0)
+            .await
+            .expect(format!("Failed to set {}", key).as_ref());
+
+        let actual = queue
+            .queue_enabled(prefix)
+            .await
+            .expect("Failed to call queue_enabled");
+
+        assert_eq!(actual, false);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_queue_size() {
+        let prefix = "test_queue_size";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}::queue_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 3;
+        let ids = generate_ids(&queue, count);
+        conn.lpush(&key, &ids)
+            .await
+            .expect(format!("Failed to push ids: {:?}", ids).as_ref());
+
+        let actual = queue
+            .queue_size(prefix)
+            .await
+            .expect("Failed to call queue_size");
+
+        assert_eq!(actual, count);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_store_capacity_sized() {
+        let prefix = "test_store_capacity_sized";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}::store_capacity", &prefix);
+        conn.set(&key, isize::MAX)
+            .await
+            .expect(format!("Failed to set {}", key).as_ref());
+
+        let actual = queue
+            .store_capacity(prefix)
+            .await
+            .expect("Failed to call store_capacity");
+
+        let expected = StoreCapacity::Sized(isize::MAX as usize);
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_store_capacity_unlimited() {
+        let prefix = "test_store_capacity_unlimited";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}::store_capacity", &prefix);
+        conn.set(&key, -1)
+            .await
+            .expect(format!("Failed to set {}", key).as_ref());
+
+        let actual = queue
+            .store_capacity(prefix)
+            .await
+            .expect("Failed to call store_capacity");
+
+        let expected = StoreCapacity::Unlimited;
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_store_size() {
+        let prefix = "test_store_size";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let key = format!("{}::store_ids", &prefix);
+        conn.del(&key)
+            .await
+            .expect(format!("Failed to delete {}", key).as_ref());
+
+        let count = 4;
+        let ids = generate_ids(&queue, count);
+
+        conn.lpush(&key, &ids)
+            .await
+            .expect(format!("Failed to push ids: {:?}", ids).as_ref());
+
+        let actual = queue
+            .store_size(prefix)
+            .await
+            .expect("Failed to call store_size");
+
+        assert_eq!(actual, count);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_waiting_page() {
+        let prefix = "test_store_capacity_sized";
+
+        let queue = test_queue();
+
+        let expected = "My Waiting Page";
+
+        queue
+            .set_waiting_page(prefix, expected)
+            .await
+            .expect("Failed to call set_waiting_page");
+
+        let actual = queue
+            .waiting_page(prefix)
+            .await
+            .expect("Failed to call waiting_page")
+            .expect("waiting page is None");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_sync_keys_false() {
+        let prefix = "test_sync_keys_false";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        let keys = &[
+            format!("{}:queue_enabled", prefix),
+            format!("{}:store_capacity", prefix),
+            format!("{}:queue_waiting_page", prefix),
+            format!("{}:queue_sync_timestamp", prefix),
+        ];
+
+        conn.del(&keys).await.expect("Failed to delete keys");
+
+        let actual = queue
+            .check_sync_keys(prefix)
+            .await
+            .expect("Failed to call check_sync_keys");
+
+        assert_eq!(actual, false);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_sync_keys_true() {
+        let prefix = "test_sync_keys_true";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        conn.set(format!("{}:queue_enabled", prefix), 1)
+            .await
+            .expect("Failed to set :queue_enabled");
+
+        conn.set(format!("{}:store_capacity", prefix), 5)
+            .await
+            .expect("Failed to set :store_capacity");
+
+        conn.set(format!("{}:queue_waiting_page", prefix), "Waiting Page")
+            .await
+            .expect("Failed to set :queue_waiting_page");
+
+        conn.set(format!("{}:queue_sync_timestamp", prefix), 1757463125)
+            .await
+            .expect("Failed to set :queue_sync_timestamp");
+
+        let actual = queue
+            .check_sync_keys(prefix)
+            .await
+            .expect("Failed to call check_sync_keys");
+
+        assert_eq!(actual, true);
     }
 }

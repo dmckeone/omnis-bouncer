@@ -61,8 +61,13 @@ impl Scripts {
     }
 
     /// Check that all keys required for syncing the queue/store are available
-    pub async fn check_sync_keys(&self, conn: &mut Connection) -> Result<bool> {
-        match self.check_sync_keys.invoke_async(conn).await? {
+    pub async fn check_sync_keys(
+        &self,
+        conn: &mut Connection,
+        prefix: impl Into<String>,
+    ) -> Result<bool> {
+        let prefix = prefix.into();
+        match self.check_sync_keys.arg(&prefix).invoke_async(conn).await? {
             1 => Ok(true),
             0 => Ok(false),
             val => {
