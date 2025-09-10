@@ -44,9 +44,9 @@ impl QueueControl {
     ) -> Result<(QueueEnabled, StoreCapacity, QueueSyncTimestamp)> {
         let prefix = prefix.into();
 
-        let enabled_key = format!("{}::queue_enabled", &prefix);
-        let capacity_key = format!("{}::store_capacity", &prefix);
-        let time_key = format!("{}::queue_sync_timestamp", &prefix);
+        let enabled_key = format!("{}:queue_enabled", &prefix);
+        let capacity_key = format!("{}:store_capacity", &prefix);
+        let time_key = format!("{}:queue_sync_timestamp", &prefix);
 
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
@@ -85,9 +85,9 @@ impl QueueControl {
         let enabled = enabled.into();
         let capacity = capacity.into();
 
-        let enabled_key = format!("{}::queue_enabled", &prefix);
-        let capacity_key = format!("{}::store_capacity", &prefix);
-        let time_key = format!("{}::queue_sync_timestamp", &prefix);
+        let enabled_key = format!("{}:queue_enabled", &prefix);
+        let capacity_key = format!("{}:store_capacity", &prefix);
+        let time_key = format!("{}:queue_sync_timestamp", &prefix);
 
         let mut conn = self.conn().await?;
         let current_time = current_time(&mut conn).await?;
@@ -107,7 +107,7 @@ impl QueueControl {
     pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
         let prefix = prefix.into();
 
-        let key = format!("{}::queue_enabled", prefix);
+        let key = format!("{}:queue_enabled", prefix);
 
         let mut conn = self.conn().await?;
         let enabled = conn.get(&key).await?;
@@ -126,7 +126,7 @@ impl QueueControl {
     pub async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let prefix = prefix.into();
 
-        let key = format!("{}::queue_ids", prefix);
+        let key = format!("{}:queue_ids", prefix);
 
         let mut conn = self.conn().await?;
         let result = conn.llen(key).await?;
@@ -138,7 +138,7 @@ impl QueueControl {
     pub async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
         let prefix = prefix.into();
 
-        let key = format!("{}::store_capacity", prefix);
+        let key = format!("{}:store_capacity", prefix);
 
         let mut conn = self.conn().await?;
         let result = conn.get(key).await?;
@@ -154,7 +154,7 @@ impl QueueControl {
     pub async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let prefix = prefix.into();
 
-        let key = format!("{}::store_ids", prefix);
+        let key = format!("{}:store_ids", prefix);
 
         let mut conn = self.conn().await?;
         let result = conn.scard(key).await?;
@@ -165,7 +165,7 @@ impl QueueControl {
     pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
         let prefix = prefix.into();
 
-        let key = format!("{}::waiting_page", prefix);
+        let key = format!("{}:waiting_page", prefix);
 
         let mut conn = self.conn().await?;
         let result = conn.get(key).await?;
@@ -181,7 +181,7 @@ impl QueueControl {
         let prefix = prefix.into();
         let waiting_page = waiting_page.into();
 
-        let key = format!("{}::waiting_page", prefix);
+        let key = format!("{}:waiting_page", prefix);
 
         let mut conn = self.conn().await?;
         conn.set(key, waiting_page).await?;
@@ -291,6 +291,24 @@ mod test {
         vec
     }
 
+    async fn clear_store(prefix: impl Into<String>, conn: &mut Connection) {
+        let prefix = prefix.into();
+
+        let keys = &[
+            format!("{}:queue_ids", prefix),
+            format!("{}:queue_position_cache", prefix),
+            format!("{}:queue_expiry_secs", prefix),
+            format!("{}:store_ids", prefix),
+            format!("{}:store_expiry_secs", prefix),
+        ];
+
+        for key in keys {
+            conn.del(&key)
+                .await
+                .expect(format!("Failed to delete {}", key).as_ref());
+        }
+    }
+
     async fn test_queue_conn() -> (QueueControl, Connection) {
         let queue = test_queue();
         let pool = queue.pool.clone();
@@ -331,16 +349,16 @@ mod test {
         let (queue, mut conn) = test_queue_conn().await;
 
         // Prepare keys
-        conn.set(format!("{}::queue_enabled", prefix), expected_enabled)
+        conn.set(format!("{}:queue_enabled", prefix), expected_enabled)
             .await
             .expect("Failed to set ::queue_enabled");
 
-        conn.set(format!("{}::store_capacity", prefix), raw_capacity)
+        conn.set(format!("{}:store_capacity", prefix), raw_capacity)
             .await
-            .expect("Failed to set ::store_capacity");
+            .expect("Failed to set :store_capacity");
 
         conn.set(
-            format!("{}::queue_sync_timestamp", prefix),
+            format!("{}:queue_sync_timestamp", prefix),
             expected_timestamp,
         )
         .await
@@ -366,7 +384,7 @@ mod test {
 
         // Prepare keys
         for key in &["queue_enabled", "store_capacity", "queue_sync_timestamp"] {
-            let full_key = format!("{}::{}", prefix, key);
+            let full_key = format!("{}:{}", prefix, key);
             conn.del(&full_key)
                 .await
                 .expect(format!("Failed to delete: {}", full_key).as_ref());
@@ -414,7 +432,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}::queue_enabled", &prefix);
+        let key = format!("{}:queue_enabled", &prefix);
         conn.set(&key, 1)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -445,7 +463,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}::queue_ids", &prefix);
+        let key = format!("{}:queue_ids", &prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -471,7 +489,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}::store_capacity", &prefix);
+        let key = format!("{}:store_capacity", &prefix);
         conn.set(&key, isize::MAX)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -492,7 +510,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}::store_capacity", &prefix);
+        let key = format!("{}:store_capacity", &prefix);
         conn.set(&key, -1)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -513,7 +531,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}::store_ids", &prefix);
+        let key = format!("{}:store_ids", &prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -700,17 +718,55 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:store_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
-
-        let key = format!("{}:queue_ids", &prefix);
-        conn.del(&key)
-            .await
-            .expect(format!("Failed to delete {}", key).as_ref());
+        clear_store(prefix, &mut conn).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, false);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_add() {
+        let prefix = "test_id_add";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_status(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        // Ensure correct starting environment
+        assert_eq!(queue.store_size(prefix).await.unwrap(), 0);
+        assert_eq!(queue.queue_size(prefix).await.unwrap(), 0);
+
+        // Add new ID to store
+        let id = queue.new_id();
+        queue
+            .id_add(
+                prefix, id, 1757510637, // unix time
+                600,        // seconds
+                45,         // seconds
+            )
+            .await
+            .expect("Failed to add new ID to store");
+
+        assert_eq!(queue.store_size(prefix).await.unwrap(), 1);
+        assert_eq!(queue.queue_size(prefix).await.unwrap(), 0);
+
+        let id = queue.new_id();
+        queue
+            .id_add(
+                prefix, id, 1757510637, // unix time
+                600,        // seconds
+                45,         // seconds
+            )
+            .await
+            .expect("Failed to add new ID to queue");
+
+        assert_eq!(queue.store_size(prefix).await.unwrap(), 1);
+        assert_eq!(queue.queue_size(prefix).await.unwrap(), 1);
     }
 }
