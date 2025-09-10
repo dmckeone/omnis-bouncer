@@ -816,9 +816,13 @@ mod test {
             .await
             .expect("Failed to set queue status");
 
-        // Ensure correct starting environment
-        assert_eq!(queue.store_size(prefix).await.unwrap(), 0);
-        assert_eq!(queue.queue_size(prefix).await.unwrap(), 0);
+        // Ensure correct, empty starting environment
+        let status = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to call queue status");
+        assert_eq!(status.store_size, 0);
+        assert_eq!(status.queue_size, 0);
 
         // Add new ID to store
         let id = queue.new_id();
@@ -831,9 +835,15 @@ mod test {
             .await
             .expect("Failed to add new ID to store");
 
-        assert_eq!(queue.store_size(prefix).await.unwrap(), 1);
-        assert_eq!(queue.queue_size(prefix).await.unwrap(), 0);
+        let status = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to call queue status");
 
+        assert_eq!(status.store_size, 1);
+        assert_eq!(status.queue_size, 0);
+
+        // Add another ID to the store, which should be queued with a store size of only 1
         let id = queue.new_id();
         queue
             .id_add(
@@ -844,7 +854,12 @@ mod test {
             .await
             .expect("Failed to add new ID to queue");
 
-        assert_eq!(queue.store_size(prefix).await.unwrap(), 1);
-        assert_eq!(queue.queue_size(prefix).await.unwrap(), 1);
+        let status = queue
+            .queue_status(prefix)
+            .await
+            .expect("Failed to call queue status");
+
+        assert_eq!(status.store_size, 1);
+        assert_eq!(status.queue_size, 1);
     }
 }
