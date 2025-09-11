@@ -159,65 +159,7 @@ impl Scripts {
         Ok(())
     }
 
-    /// Remove timed out UUIDs from the queue, based on the current_time
-    /// from [TIME](https://redis.io/docs/latest/commands/time/)
-    pub async fn queue_timeout(
-        &self,
-        conn: &mut Connection,
-        prefix: impl Into<String>,
-        current_time: u64,
-    ) -> Result<u64> {
-        let prefix = prefix.into();
-        let position = self
-            .queue_timeout
-            .arg(&prefix)
-            .arg(current_time)
-            .invoke_async(conn)
-            .await?;
-
-        Ok(position)
-    }
-
-    /// Promote an integer number of UUIDs from the queue into the store
-    pub async fn store_promote(
-        &self,
-        conn: &mut Connection,
-        prefix: impl Into<String>,
-        batch_size: u64,
-    ) -> Result<u64> {
-        let prefix = prefix.into();
-
-        let position = self
-            .store_promote
-            .arg(&prefix)
-            .arg(batch_size)
-            .invoke_async(conn)
-            .await?;
-
-        Ok(position)
-    }
-
-    /// Remove timed out UUIDs from the store, based on the current_time
-    /// from [TIME](https://redis.io/docs/latest/commands/time/)
-    pub async fn store_timeout(
-        &self,
-        conn: &mut Connection,
-        prefix: impl Into<String>,
-        current_time: u64,
-    ) -> Result<u64> {
-        let prefix = prefix.into();
-
-        let position = self
-            .store_timeout
-            .arg(&prefix)
-            .arg(current_time)
-            .invoke_async(conn)
-            .await?;
-
-        Ok(position)
-    }
-
-    /// Full queue rotation using scripts in a pipeline
+    /// Full queue/store timeout eviction with queue to store promotion
     pub async fn rotate_full(
         &self,
         conn: &mut Connection,
