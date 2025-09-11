@@ -255,11 +255,17 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: usize,
+        time: Option<usize>,
         validated_expiry: usize,
         quarantine_expiry: usize,
     ) -> Result<usize> {
         let mut conn = self.conn().await?;
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(&mut conn).await?,
+        };
+
         self.scripts
             .id_add(
                 &mut conn,
@@ -278,11 +284,17 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: usize,
+        time: Option<usize>,
         validated_expiry: usize,
         quarantine_expiry: usize,
     ) -> Result<usize> {
         let mut conn = self.conn().await?;
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(&mut conn).await?,
+        };
+
         self.scripts
             .id_position(
                 &mut conn,
@@ -296,27 +308,43 @@ impl QueueControl {
     }
 
     /// Remove a given UUID from the queue/store
-    pub async fn id_remove(&self, prefix: impl Into<String>, id: Uuid) -> Result<()> {
+    pub async fn id_remove(
+        &self,
+        prefix: impl Into<String>,
+        id: Uuid,
+        time: Option<usize>,
+    ) -> Result<()> {
         let mut conn = self.conn().await?;
-        self.scripts.id_remove(&mut conn, prefix, id).await
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(&mut conn).await?,
+        };
+
+        self.scripts.id_remove(&mut conn, prefix, id, time).await
     }
 
     /// Full queue rotation using scripts in a pipeline
     pub async fn rotate_full(
         &self,
         prefix: impl Into<String>,
+        time: Option<usize>,
         batch_size: usize,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
         self.scripts
-            .rotate_full(&mut conn, prefix, batch_size)
+            .rotate_full(&mut conn, prefix, time, batch_size)
             .await
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
-    pub async fn rotate_expire(&self, prefix: impl Into<String>) -> Result<QueueRotate> {
+    pub async fn rotate_expire(
+        &self,
+        prefix: impl Into<String>,
+        time: Option<usize>,
+    ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts.rotate_expire(&mut conn, prefix).await
+        self.scripts.rotate_expire(&mut conn, prefix, time).await
     }
 }
 
@@ -358,7 +386,45 @@ mod test {
         }
     }
 
-    async fn add_queue_ids(
+    /// Add `count` users to the queue
+    async fn add_many(queue: &QueueControl, prefix: impl Into<String>, count: usize) -> Vec<Uuid> {
+        let prefix = prefix.into();
+
+        let mut ids = Vec::new();
+        for _ in 0..count {
+            let id = queue.new_id();
+
+            queue
+                .id_add(
+                    &prefix, id, None, 600, // seconds
+                    45,  // seconds
+                )
+                .await
+                .expect("Failed to add new ID to queue");
+
+            ids.push(id);
+        }
+
+        ids
+    }
+
+    async fn exists_in_store(prefix: &str, conn: &mut Connection, id: impl Into<String>) -> bool {
+        let id = id.into();
+        let (store_exists, store_expiry_exists): (Option<String>, Option<String>) = pipe()
+            .sismember(format!("{}:store_ids", prefix), id.clone())
+            .hexists(format!("{}:store_expiry_secs", prefix), id.clone())
+            .query_async(conn)
+            .await
+            .expect("Failed to check store");
+
+        let store_exists = store_exists.expect("Store exists incorrectly returned nil");
+        let store_expiry_exists =
+            store_expiry_exists.expect("Store expiry incorrectly returned nil");
+
+        store_exists == "1" && store_expiry_exists == "1"
+    }
+
+    async fn push_queue_ids(
         prefix: impl Into<String>,
         queue: &QueueControl,
         conn: &mut Connection,
@@ -378,7 +444,7 @@ mod test {
             .expect(format!("Failed to queue ids: {:?}", ids).as_ref());
     }
 
-    async fn add_store_ids(
+    async fn push_store_ids(
         prefix: impl Into<String>,
         queue: &QueueControl,
         conn: &mut Connection,
@@ -435,11 +501,10 @@ mod test {
         let expected_capacity = StoreCapacity::try_from(raw_capacity).unwrap();
         let expected_store_size = 2;
         let expected_queue_size = 5;
-        let expected_timestamp: usize = 1757438630;
 
         let (queue, mut conn) = test_queue_conn().await;
-        add_store_ids(prefix, &queue, &mut conn, expected_store_size).await;
-        add_queue_ids(prefix, &queue, &mut conn, expected_queue_size).await;
+        push_store_ids(prefix, &queue, &mut conn, expected_store_size).await;
+        push_queue_ids(prefix, &queue, &mut conn, expected_queue_size).await;
 
         queue
             .set_queue_settings(prefix, expected_enabled, expected_capacity.clone())
@@ -758,7 +823,7 @@ mod test {
         let prefix = "test_has_ids_true_queue";
 
         let (queue, mut conn) = test_queue_conn().await;
-        add_queue_ids(prefix, &queue, &mut conn, 1).await;
+        push_queue_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
 
@@ -771,7 +836,7 @@ mod test {
         let prefix = "test_has_ids_true_store";
 
         let (queue, mut conn) = test_queue_conn().await;
-        add_store_ids(prefix, &queue, &mut conn, 1).await;
+        push_store_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
@@ -783,8 +848,8 @@ mod test {
         let prefix = "test_has_ids_true_both";
 
         let (queue, mut conn) = test_queue_conn().await;
-        add_store_ids(prefix, &queue, &mut conn, 1).await;
-        add_queue_ids(prefix, &queue, &mut conn, 1).await;
+        push_store_ids(prefix, &queue, &mut conn, 1).await;
+        push_queue_ids(prefix, &queue, &mut conn, 1).await;
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
@@ -828,9 +893,11 @@ mod test {
         let id = queue.new_id();
         queue
             .id_add(
-                prefix, id, 1757510637, // unix time
-                600,        // seconds
-                45,         // seconds
+                prefix,
+                id,
+                Some(1757510637), // unix time
+                600,              // seconds
+                45,               // seconds
             )
             .await
             .expect("Failed to add new ID to store");
@@ -847,9 +914,11 @@ mod test {
         let id = queue.new_id();
         queue
             .id_add(
-                prefix, id, 1757510637, // unix time
-                600,        // seconds
-                45,         // seconds
+                prefix,
+                id,
+                Some(1757510637), // unix time
+                600,              // seconds
+                45,               // seconds
             )
             .await
             .expect("Failed to add new ID to queue");
@@ -861,5 +930,118 @@ mod test {
 
         assert_eq!(status.store_size, 1);
         assert_eq!(status.queue_size, 1);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_position() {
+        let prefix = "test_id_position";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        let count = 5;
+        let ids = add_many(&queue, prefix, count).await;
+        let first_id = &ids[0];
+        let last_id = &ids[ids.len() - 1];
+
+        // Check that the first ID is in the store
+        let position = queue
+            .id_position(prefix, *first_id, None, 600, 45)
+            .await
+            .expect("Failed to get first position");
+
+        assert_eq!(position, 0);
+
+        // Check that the last ID is at the back of the line (queue positions are indexed from 1)
+        let position = queue
+            .id_position(prefix, *last_id, None, 600, 45)
+            .await
+            .expect("Failed to get last position");
+
+        assert_eq!(position, count - 1);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_remove_store() {
+        let prefix = "test_id_remove_store";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        let count = 5;
+        let ids = add_many(&queue, prefix, count).await;
+        let store_id = &ids[0];
+        let store_id_string = store_id.to_string();
+
+        let exists = exists_in_store(prefix, &mut conn, store_id_string.clone()).await;
+        assert_eq!(exists, true);
+
+        // Remove first ID from store
+        queue
+            .id_remove(prefix, *store_id, None)
+            .await
+            .expect("Failed to removed first ID");
+
+        let exists = exists_in_store(prefix, &mut conn, store_id_string.clone()).await;
+        assert_eq!(exists, false);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_remove_queue() {
+        let prefix = "test_id_remove_queue";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        let count = 5;
+        let ids = add_many(&queue, prefix, count).await;
+        let id = &ids[1]; // Index 1 is first item in queue
+        let id_string = id.to_string();
+
+        let exists: bool = conn
+            .hexists(format!("{}:queue_expiry_secs", prefix), id_string.clone())
+            .await
+            .expect("Failed to fetch queue expiry value");
+
+        assert_eq!(exists, true);
+
+        let time = 175760525;
+
+        // "Remove" ID from queue -- really just marks the ID as expired
+        queue
+            .id_remove(prefix, *id, Some(time))
+            .await
+            .expect("Failed to removed queue ID");
+
+        let result: Option<String> = conn
+            .hget(format!("{}:queue_expiry_secs", prefix), id_string.clone())
+            .await
+            .expect("Failed to fetch queue expiry value");
+
+        let expiry_time = result.unwrap().parse::<usize>().unwrap();
+
+        // Verify that the "removal" correctly set the time back by 1 second
+        assert_eq!(expiry_time, time - 1);
     }
 }

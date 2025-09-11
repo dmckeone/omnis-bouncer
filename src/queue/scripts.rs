@@ -145,12 +145,14 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
+        time: usize,
     ) -> Result<()> {
         let prefix = prefix.into();
-        let _: i64 = self
+        let _: Option<String> = self
             .id_remove
             .arg(&prefix)
             .arg(String::from(id))
+            .arg(time)
             .invoke_async(conn)
             .await?;
 
@@ -220,15 +222,20 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
+        time: Option<usize>,
         batch_size: usize,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
-        let current_time = current_time(conn).await?;
+        let time = match time {
+            Some(t) => t,
+            None => current_time(conn).await?,
+        };
+
         let (store_removed, moved, queue_removed) = pipe()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(current_time))
+            .invoke_script(self.store_timeout.arg(&prefix).arg(time))
             .invoke_script(self.store_promote.arg(&prefix).arg(batch_size))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(current_time))
+            .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
             .query_async(conn)
             .await?;
 
@@ -244,13 +251,18 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
+        time: Option<usize>,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
-        let current_time = current_time(conn).await?;
+        let time = match time {
+            Some(t) => t,
+            None => current_time(conn).await?,
+        };
+
         let (store_removed, queue_removed) = pipe()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(current_time))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(current_time))
+            .invoke_script(self.store_timeout.arg(&prefix).arg(time))
+            .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
             .query_async(conn)
             .await?;
 
