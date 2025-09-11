@@ -51,13 +51,14 @@ impl QueueControl {
 
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
-        let result: (
+        type Result = (
             Option<isize>,
             Option<isize>,
             Option<usize>,
             Option<usize>,
             Option<isize>,
-        ) = pipe()
+        );
+        let result: Result = pipe()
             .atomic()
             .get(enabled_key)
             .get(capacity_key)
@@ -73,8 +74,8 @@ impl QueueControl {
                 None => false,
             },
             capacity: StoreCapacity::try_from(result.1)?,
-            store_size: result.2.unwrap_or_else(|| 0),
-            queue_size: result.3.unwrap_or_else(|| 0),
+            store_size: result.2.unwrap_or(0),
+            queue_size: result.3.unwrap_or(0),
             sync_timestamp: match result.4 {
                 Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
                 None => 0,
@@ -134,6 +135,7 @@ impl QueueControl {
 
         // Set all values in single pipeline to ensure atomic consistency
         let _: (Option<String>, Option<String>, Option<String>) = pipe()
+            .atomic()
             .set(enabled_key, isize::from(enabled))
             .set(capacity_key, isize::from(capacity))
             .set(time_key, current_time)
@@ -403,7 +405,7 @@ mod test {
 
     async fn exists_in_store(prefix: &str, conn: &mut Connection, id: impl Into<String>) -> bool {
         let id = id.into();
-        let (store_exists, store_expiry_exists): (Option<String>, Option<String>) = pipe()
+        let (store_exists, store_expiry_exists): (Option<isize>, Option<isize>) = pipe()
             .sismember(format!("{}:store_ids", prefix), id.clone())
             .hexists(format!("{}:store_expiry_secs", prefix), id.clone())
             .query_async(conn)
@@ -414,7 +416,7 @@ mod test {
         let store_expiry_exists =
             store_expiry_exists.expect("Store expiry incorrectly returned nil");
 
-        store_exists == "1" && store_expiry_exists == "1"
+        store_exists == 1 && store_expiry_exists == 1
     }
 
     async fn push_queue_ids(
@@ -1063,9 +1065,9 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.store_removed, 1); // Should remove the timed out ID in the store
-        assert_eq!(rotation.moved, 0); // No items will be transferred because they are all timed out
-        assert_eq!(rotation.queue_removed, count - 1); // All other IDs in the queue will also time out
+        assert_eq!(rotation.queue_removed, count - 1);
+        assert_eq!(rotation.store_removed, 1);
+        assert_eq!(rotation.promoted, 0);
     }
 
     #[tokio::test]
@@ -1103,9 +1105,9 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.store_removed, store_capacity);
-        assert_eq!(rotation.moved, store_capacity);
         assert_eq!(rotation.queue_removed, initial_store_count - store_capacity);
+        assert_eq!(rotation.store_removed, store_capacity);
+        assert_eq!(rotation.promoted, store_capacity);
 
         let queue_size = queue
             .queue_size(prefix)
@@ -1145,8 +1147,8 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.store_removed, 1); // Should remove the timed out ID in the store
-        assert_eq!(rotation.moved, 0); // No items will be transferred because they are all timed out
-        assert_eq!(rotation.queue_removed, count - 1); // All other IDs in the queue will also time out
+        assert_eq!(rotation.queue_removed, count - 1);
+        assert_eq!(rotation.store_removed, 1);
+        assert_eq!(rotation.promoted, 0);
     }
 }

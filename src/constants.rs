@@ -7,4 +7,4 @@ pub static REDIS_FUNCTIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR
 pub static STATIC_ASSETS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 // Error messages
-pub static ERROR_NULL_STRING: &'static str = "<null>";
+pub static ERROR_NULL_STRING: &str = "<null>";

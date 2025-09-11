@@ -232,13 +232,14 @@ impl Scripts {
         };
 
         // Run eviction scripts and fetch the new sizes and capacity
-        let result: (
+        type Result = (
             Option<usize>,
             Option<usize>,
             Option<isize>,
             Option<usize>,
             Option<usize>,
-        ) = pipe()
+        );
+        let result: Result = pipe()
             .atomic()
             .invoke_script(self.store_timeout.arg(&prefix).arg(time))
             .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
@@ -262,15 +263,17 @@ impl Scripts {
         };
 
         // Transfer items from queue to store
-        let moved = conn
+        let promoted = conn
             .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
             .await?;
 
-        Ok(QueueRotate {
-            store_removed,
-            moved,
+        let rotate = QueueRotate {
             queue_removed,
-        })
+            store_removed,
+            promoted,
+        };
+
+        Ok(rotate)
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
@@ -294,11 +297,13 @@ impl Scripts {
             .query_async(conn)
             .await?;
 
-        Ok(QueueRotate {
-            store_removed,
-            moved: 0,
+        let rotate = QueueRotate {
             queue_removed,
-        })
+            store_removed,
+            promoted: 0,
+        };
+
+        Ok(rotate)
     }
 }
 

@@ -16,9 +16,9 @@ pub struct QueueStatus {
 }
 
 pub struct QueueRotate {
-    pub store_removed: usize,
-    pub moved: usize,
     pub queue_removed: usize,
+    pub store_removed: usize,
+    pub promoted: usize,
 }
 
 #[derive(Clone, PartialEq, Debug)]
