@@ -1,11 +1,11 @@
 use deadpool_redis::{redis, Connection};
-use redis::{pipe, Script};
+use redis::{pipe, AsyncTypedCommands, Script};
 use uuid::Uuid;
 
 use crate::constants::REDIS_FUNCTIONS_DIR;
 use crate::database::current_time;
 use crate::errors::{Error, Result};
-use crate::queue::models::QueueRotate;
+use crate::queue::models::{QueueRotate, StoreCapacity};
 
 pub struct Scripts {
     check_sync_keys: Script,
@@ -223,7 +223,6 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         time: Option<usize>,
-        batch_size: usize,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
@@ -232,11 +231,39 @@ impl Scripts {
             None => current_time(conn).await?,
         };
 
-        let (store_removed, moved, queue_removed) = pipe()
+        // Run eviction scripts and fetch the new sizes and capacity
+        let result: (
+            Option<usize>,
+            Option<usize>,
+            Option<isize>,
+            Option<usize>,
+            Option<usize>,
+        ) = pipe()
+            .atomic()
             .invoke_script(self.store_timeout.arg(&prefix).arg(time))
-            .invoke_script(self.store_promote.arg(&prefix).arg(batch_size))
             .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
+            .get(format!("{}:store_capacity", prefix))
+            .llen(format!("{}:queue_ids", prefix))
+            .scard(format!("{}:store_ids", prefix))
             .query_async(conn)
+            .await?;
+
+        // Unpack the results
+        let store_removed = result.0.unwrap_or(0);
+        let queue_removed = result.1.unwrap_or(0);
+        let store_capacity = StoreCapacity::try_from(result.2)?;
+        let queue_size = result.3.unwrap_or(0);
+        let store_size = result.4.unwrap_or(0);
+
+        // Determine transfer size
+        let transfer_size = match store_capacity {
+            StoreCapacity::Sized(capacity) => capacity - store_size,
+            StoreCapacity::Unlimited => queue_size,
+        };
+
+        // Transfer items from queue to store
+        let moved = conn
+            .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
             .await?;
 
         Ok(QueueRotate {
@@ -261,6 +288,7 @@ impl Scripts {
         };
 
         let (store_removed, queue_removed) = pipe()
+            .atomic()
             .invoke_script(self.store_timeout.arg(&prefix).arg(time))
             .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
             .query_async(conn)

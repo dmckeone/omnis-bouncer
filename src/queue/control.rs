@@ -72,10 +72,7 @@ impl QueueControl {
                 Some(enabled) => QueueEnabled::try_from(enabled)?.into(),
                 None => false,
             },
-            capacity: match result.1 {
-                Some(capacity) => StoreCapacity::try_from(capacity)?,
-                None => StoreCapacity::Unlimited,
-            },
+            capacity: StoreCapacity::try_from(result.1)?,
             store_size: result.2.unwrap_or_else(|| 0),
             queue_size: result.3.unwrap_or_else(|| 0),
             sync_timestamp: match result.4 {
@@ -106,14 +103,8 @@ impl QueueControl {
             .await?;
 
         let settings = QueueSettings {
-            enabled: match result.0 {
-                Some(enabled) => QueueEnabled::try_from(enabled)?.into(),
-                None => false,
-            },
-            capacity: match result.1 {
-                Some(capacity) => StoreCapacity::try_from(capacity)?,
-                None => StoreCapacity::Unlimited,
-            },
+            enabled: QueueEnabled::try_from(result.0)?.into(),
+            capacity: StoreCapacity::try_from(result.1)?,
             sync_timestamp: match result.2 {
                 Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
                 None => 0,
@@ -192,10 +183,7 @@ impl QueueControl {
         let mut conn = self.conn().await?;
         let result = conn.get(key).await?;
 
-        let capacity = match result {
-            Some(r) => StoreCapacity::try_from(r)?,
-            None => StoreCapacity::Unlimited,
-        };
+        let capacity = StoreCapacity::try_from(result)?;
         Ok(capacity)
     }
 
@@ -329,12 +317,9 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         time: Option<usize>,
-        batch_size: usize,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts
-            .rotate_full(&mut conn, prefix, time, batch_size)
-            .await
+        self.scripts.rotate_full(&mut conn, prefix, time).await
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
@@ -354,6 +339,9 @@ mod test {
     use crate::database::test::create_test_pool;
     use redis::AsyncTypedCommands;
     use tracing_test::traced_test;
+
+    static QUARANTINE: usize = 45;
+    static VALIDATED: usize = 600;
 
     fn test_queue() -> QueueControl {
         let pool = create_test_pool().expect("Failed to create test pool");
@@ -387,7 +375,12 @@ mod test {
     }
 
     /// Add `count` users to the queue
-    async fn add_many(queue: &QueueControl, prefix: impl Into<String>, count: usize) -> Vec<Uuid> {
+    async fn add_many(
+        queue: &QueueControl,
+        prefix: impl Into<String>,
+        count: usize,
+        time: Option<usize>,
+    ) -> Vec<Uuid> {
         let prefix = prefix.into();
 
         let mut ids = Vec::new();
@@ -396,8 +389,8 @@ mod test {
 
             queue
                 .id_add(
-                    &prefix, id, None, 600, // seconds
-                    45,  // seconds
+                    &prefix, id, time, VALIDATED,  // seconds
+                    QUARANTINE, // seconds
                 )
                 .await
                 .expect("Failed to add new ID to queue");
@@ -896,8 +889,8 @@ mod test {
                 prefix,
                 id,
                 Some(1757510637), // unix time
-                600,              // seconds
-                45,               // seconds
+                VALIDATED,        // seconds
+                QUARANTINE,       // seconds
             )
             .await
             .expect("Failed to add new ID to store");
@@ -917,8 +910,8 @@ mod test {
                 prefix,
                 id,
                 Some(1757510637), // unix time
-                600,              // seconds
-                45,               // seconds
+                VALIDATED,        // seconds
+                QUARANTINE,       // seconds
             )
             .await
             .expect("Failed to add new ID to queue");
@@ -947,13 +940,13 @@ mod test {
             .expect("Failed to set queue status");
 
         let count = 5;
-        let ids = add_many(&queue, prefix, count).await;
+        let ids = add_many(&queue, prefix, count, None).await;
         let first_id = &ids[0];
         let last_id = &ids[ids.len() - 1];
 
         // Check that the first ID is in the store
         let position = queue
-            .id_position(prefix, *first_id, None, 600, 45)
+            .id_position(prefix, *first_id, None, VALIDATED, QUARANTINE)
             .await
             .expect("Failed to get first position");
 
@@ -961,7 +954,7 @@ mod test {
 
         // Check that the last ID is at the back of the line (queue positions are indexed from 1)
         let position = queue
-            .id_position(prefix, *last_id, None, 600, 45)
+            .id_position(prefix, *last_id, None, VALIDATED, QUARANTINE)
             .await
             .expect("Failed to get last position");
 
@@ -983,7 +976,7 @@ mod test {
             .expect("Failed to set queue status");
 
         let count = 5;
-        let ids = add_many(&queue, prefix, count).await;
+        let ids = add_many(&queue, prefix, count, None).await;
         let store_id = &ids[0];
         let store_id_string = store_id.to_string();
 
@@ -1015,7 +1008,7 @@ mod test {
             .expect("Failed to set queue status");
 
         let count = 5;
-        let ids = add_many(&queue, prefix, count).await;
+        let ids = add_many(&queue, prefix, count, None).await;
         let id = &ids[1]; // Index 1 is first item in queue
         let id_string = id.to_string();
 
@@ -1043,5 +1036,117 @@ mod test {
 
         // Verify that the "removal" correctly set the time back by 1 second
         assert_eq!(expiry_time, time - 1);
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rotate_full_timeout() {
+        let prefix = "test_rotate_full_timeout";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        let insert_time = 1757610168;
+        let rotate_time = insert_time + VALIDATED + 1;
+
+        let count = 5;
+        let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
+
+        let rotation = queue
+            .rotate_full(prefix, Some(rotate_time))
+            .await
+            .expect("Failed to rotate");
+
+        assert_eq!(rotation.store_removed, 1); // Should remove the timed out ID in the store
+        assert_eq!(rotation.moved, 0); // No items will be transferred because they are all timed out
+        assert_eq!(rotation.queue_removed, count - 1); // All other IDs in the queue will also time out
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rotate_full_promote() {
+        let prefix = "test_rotate_full_promote";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 2
+        let store_capacity = 2;
+
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(store_capacity))
+            .await
+            .expect("Failed to set queue status");
+
+        // Setup timeouts and counts
+        let insert_time_a = 1757613534;
+        let insert_time_b = insert_time_a + (VALIDATED * 2);
+        let rotate_time = insert_time_a + VALIDATED + 1;
+
+        let initial_store_count = 3;
+        let followup_queue_count = 5;
+
+        // Add all items to the queue
+        let _ = add_many(&queue, prefix, initial_store_count, Some(insert_time_a)).await;
+        let _ = add_many(&queue, prefix, followup_queue_count, Some(insert_time_b)).await;
+
+        // Rotate and ensure that all initial IDs are removed, with the followup IDs moved into
+        // the store
+        let rotation = queue
+            .rotate_full(prefix, Some(rotate_time))
+            .await
+            .expect("Failed to rotate");
+
+        assert_eq!(rotation.store_removed, store_capacity);
+        assert_eq!(rotation.moved, store_capacity);
+        assert_eq!(rotation.queue_removed, initial_store_count - store_capacity);
+
+        let queue_size = queue
+            .queue_size(prefix)
+            .await
+            .expect("Failed to get queue size");
+        assert_eq!(queue_size, followup_queue_count - store_capacity);
+
+        let store_size = queue
+            .store_size(prefix)
+            .await
+            .expect("Failed to get store size");
+        assert_eq!(store_size, store_capacity)
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_rotate_expire() {
+        let prefix = "test_rotate_expire";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
+            .await
+            .expect("Failed to set queue status");
+
+        let insert_time = 1757610168;
+        let rotate_time = insert_time + VALIDATED + 1;
+
+        let count = 5;
+        let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
+
+        let rotation = queue
+            .rotate_expire(prefix, Some(rotate_time))
+            .await
+            .expect("Failed to rotate");
+
+        assert_eq!(rotation.store_removed, 1); // Should remove the timed out ID in the store
+        assert_eq!(rotation.moved, 0); // No items will be transferred because they are all timed out
+        assert_eq!(rotation.queue_removed, count - 1); // All other IDs in the queue will also time out
     }
 }

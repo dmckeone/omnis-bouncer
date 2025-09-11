@@ -26,6 +26,28 @@ pub enum StoreCapacity {
     Unlimited,
 }
 
+impl TryFrom<Option<String>> for StoreCapacity {
+    type Error = Error;
+
+    fn try_from(size: Option<String>) -> Result<StoreCapacity> {
+        match size {
+            Some(c) => StoreCapacity::try_from(c.parse::<isize>()?),
+            None => Ok(StoreCapacity::Unlimited),
+        }
+    }
+}
+
+impl TryFrom<Option<isize>> for StoreCapacity {
+    type Error = Error;
+
+    fn try_from(size: Option<isize>) -> Result<StoreCapacity> {
+        match size {
+            Some(c) => StoreCapacity::try_from(c),
+            None => Ok(StoreCapacity::Unlimited),
+        }
+    }
+}
+
 impl TryFrom<isize> for StoreCapacity {
     type Error = Error;
 
@@ -96,6 +118,17 @@ impl TryFrom<String> for QueueEnabled {
     }
 }
 
+impl TryFrom<Option<isize>> for QueueEnabled {
+    type Error = Error;
+
+    fn try_from(value: Option<isize>) -> Result<Self> {
+        match value {
+            Some(v) => QueueEnabled::try_from(v),
+            None => Ok(QueueEnabled(false)),
+        }
+    }
+}
+
 impl TryFrom<isize> for QueueEnabled {
     type Error = Error;
     fn try_from(value: isize) -> Result<Self> {
@@ -144,9 +177,29 @@ impl TryFrom<String> for QueueSyncTimestamp {
     }
 }
 
+impl TryFrom<Option<isize>> for QueueSyncTimestamp {
+    type Error = Error;
+    fn try_from(value: Option<isize>) -> Result<Self> {
+        match value {
+            Some(v) => Ok(Self::from(v)),
+            None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+        }
+    }
+}
+
 impl From<isize> for QueueSyncTimestamp {
     fn from(value: isize) -> Self {
         Self(value as usize)
+    }
+}
+
+impl TryFrom<Option<usize>> for QueueSyncTimestamp {
+    type Error = Error;
+    fn try_from(value: Option<usize>) -> Result<Self> {
+        match value {
+            Some(v) => Ok(Self::from(v)),
+            None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+        }
     }
 }
 
