@@ -16,22 +16,24 @@ Redis database, using the same functions
 ## Management Knobs
 
 * **Store**
-    * `::store_capacity`: `INTEGER` - Maximum number of IDs permitted in the store. `< 0` indicates an infinite
+    * `:store_capacity`: `INTEGER` - Maximum number of IDs permitted in the store. `< 0` indicates an infinite
       size store.  `0` is a closed store that will not let anyone in from the queue.
 * **Queue**
-    * `::queue_enabled`: `INTEGER` `0` - Queue Disabled, `1`: Queue Enabled
-    * `::queue_waiting_page`: `STRING` - Static HTML content of waiting page to serve to IDs waiting in the queue
-    * `::queue_sync_timestamp`: `INTEGER` - Store result of [TIME](https://redis.io/docs/latest/commands/time/) when
+    * `:queue_enabled`: `INTEGER` `0` - Queue Disabled, `1`: Queue Enabled
+    * `:queue_waiting_page`: `STRING` - Static HTML content of waiting page to serve to IDs waiting in the queue
+    * `:queue_sync_timestamp`: `INTEGER` - Store result of [TIME](https://redis.io/docs/latest/commands/time/) when
       queue
       state was last synced to a database
 
 ## Internal State Tracking
 
 * **Store**
-    * `::store_ids`: `SET` - Set of IDs within the store
-    * `::store_expiry_secs`: `HASH` - Hash map (**key**: ID, **value**: store timeout in seconds)
+    * `:store_ids`: `SET` - Set of IDs within the store
+    * `:store_expiry_secs`: `HASH` - Hash map (**key**: ID, **value
+      **: [TIME](https://redis.io/docs/latest/commands/time/) when ID should expire from the store)
 * **Queue**
-    * `::queue_ids`: `LIST` - Ordered list of IDs within the queue
-    * `::queue_expiry_secs`: `HASH` - Hash map (**key**: ID, **value**: queue timeout in seconds)
-    * `::queue_position_cache`: `HASH` - Hash map (**key**: ID, **value**: last known integer queue position), this
+    * `:queue_ids`: `LIST` - Ordered list of IDs within the queue
+    * `:queue_expiry_secs`: `HASH` - Hash map (**key**: ID, **value
+      **: [TIME](https://redis.io/docs/latest/commands/time/) when ID should expiry from the queue)
+    * `:queue_position_cache`: `HASH` - Hash map (**key**: ID, **value**: last known integer queue position), this
       optimization allows for quick lookups of queue position at the cost of slower modifications to the queue.
