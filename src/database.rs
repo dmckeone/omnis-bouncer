@@ -18,7 +18,7 @@ pub async fn current_time(conn: &mut Connection) -> Result<usize> {
     let result: (Option<usize>, Option<usize>) = cmd("TIME").query_async(conn).await?;
     match result.0 {
         Some(t) => Ok(t),
-        None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+        None => Err(Error::RedisTimeIsNil),
     }
 }
 

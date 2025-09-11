@@ -8,6 +8,7 @@ pub enum Error {
     QueueEnabledOutOfRange(String),
     StoreCapacityOutOfRange(String),
     QueueSyncTimestampOutOfRange(String),
+    RedisTimeIsNil,
     RedisScriptUnreadable(String),
     Unknown(anyhow::Error),
 }
@@ -24,6 +25,7 @@ impl IntoResponse for Error {
             Error::QueueSyncTimestampOutOfRange(size) => {
                 error!("queue sync timestamp out of range: {}", size)
             }
+            Error::RedisTimeIsNil => error!("redis time is incorrectly returning nil"),
             Error::RedisScriptUnreadable(script) => error!("script unreadable: {}", script),
             Error::Unknown(error) => error!("unknown error: {:?}", error),
         };

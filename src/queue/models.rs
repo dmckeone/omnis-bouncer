@@ -1,3 +1,4 @@
+use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
 
 pub struct QueueSettings {
@@ -29,10 +30,13 @@ pub enum StoreCapacity {
 impl TryFrom<Option<String>> for StoreCapacity {
     type Error = Error;
 
-    fn try_from(size: Option<String>) -> Result<StoreCapacity> {
+    fn try_from(size: Option<String>) -> Result<Self> {
         match size {
-            Some(c) => StoreCapacity::try_from(c.parse::<isize>()?),
-            None => Ok(StoreCapacity::Unlimited),
+            Some(c) => match c.parse::<isize>() {
+                Ok(v) => Self::try_from(v),
+                Err(_) => Err(Error::StoreCapacityOutOfRange(c)),
+            },
+            None => Ok(Self::Unlimited),
         }
     }
 }
@@ -40,10 +44,10 @@ impl TryFrom<Option<String>> for StoreCapacity {
 impl TryFrom<Option<isize>> for StoreCapacity {
     type Error = Error;
 
-    fn try_from(size: Option<isize>) -> Result<StoreCapacity> {
+    fn try_from(size: Option<isize>) -> Result<Self> {
         match size {
-            Some(c) => StoreCapacity::try_from(c),
-            None => Ok(StoreCapacity::Unlimited),
+            Some(c) => Self::try_from(c),
+            None => Ok(Self::Unlimited),
         }
     }
 }
@@ -51,11 +55,11 @@ impl TryFrom<Option<isize>> for StoreCapacity {
 impl TryFrom<isize> for StoreCapacity {
     type Error = Error;
 
-    fn try_from(size: isize) -> Result<StoreCapacity> {
+    fn try_from(size: isize) -> Result<Self> {
         match size {
             ..-1 => Err(Error::StoreCapacityOutOfRange(size.to_string())),
-            -1 => Ok(StoreCapacity::Unlimited),
-            0.. => Ok(StoreCapacity::Sized(size as usize)),
+            -1 => Ok(Self::Unlimited),
+            0.. => Ok(Self::Sized(size as usize)),
         }
     }
 }
@@ -63,16 +67,21 @@ impl TryFrom<isize> for StoreCapacity {
 impl TryFrom<&str> for StoreCapacity {
     type Error = Error;
 
-    fn try_from(value: &str) -> Result<StoreCapacity> {
-        StoreCapacity::try_from(value.parse::<isize>()?)
+    fn try_from(value: &str) -> Result<Self> {
+        Self::try_from(match value.parse::<isize>() {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(Error::StoreCapacityOutOfRange(String::from(value)));
+            }
+        })
     }
 }
 
 impl TryFrom<String> for StoreCapacity {
     type Error = Error;
 
-    fn try_from(value: String) -> Result<StoreCapacity> {
-        StoreCapacity::try_from(value.as_ref())
+    fn try_from(value: String) -> Result<Self> {
+        Self::try_from(value.as_ref())
     }
 }
 
@@ -90,7 +99,7 @@ pub struct QueueEnabled(pub bool);
 
 impl From<bool> for QueueEnabled {
     fn from(value: bool) -> Self {
-        QueueEnabled(value)
+        Self(value)
     }
 }
 
@@ -111,10 +120,23 @@ impl TryFrom<&str> for QueueEnabled {
     }
 }
 
+impl TryFrom<Option<String>> for QueueEnabled {
+    type Error = Error;
+    fn try_from(value: Option<String>) -> Result<Self> {
+        match value {
+            Some(v) => match v.parse::<isize>() {
+                Ok(e) => Self::try_from(e),
+                Err(_) => Err(Error::QueueEnabledOutOfRange(v)),
+            },
+            None => Ok(Self(false)),
+        }
+    }
+}
+
 impl TryFrom<String> for QueueEnabled {
     type Error = Error;
     fn try_from(value: String) -> Result<Self> {
-        QueueEnabled::try_from(value.as_ref())
+        Self::try_from(value.as_ref())
     }
 }
 
@@ -123,8 +145,8 @@ impl TryFrom<Option<isize>> for QueueEnabled {
 
     fn try_from(value: Option<isize>) -> Result<Self> {
         match value {
-            Some(v) => QueueEnabled::try_from(v),
-            None => Ok(QueueEnabled(false)),
+            Some(v) => Self::try_from(v),
+            None => Ok(Self(false)),
         }
     }
 }
@@ -173,7 +195,7 @@ impl TryFrom<&str> for QueueSyncTimestamp {
 impl TryFrom<String> for QueueSyncTimestamp {
     type Error = Error;
     fn try_from(value: String) -> Result<Self> {
-        QueueSyncTimestamp::try_from(value.as_ref())
+        Self::try_from(value.as_ref())
     }
 }
 
@@ -182,7 +204,9 @@ impl TryFrom<Option<isize>> for QueueSyncTimestamp {
     fn try_from(value: Option<isize>) -> Result<Self> {
         match value {
             Some(v) => Ok(Self::from(v)),
-            None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+            None => Err(Error::QueueSyncTimestampOutOfRange(String::from(
+                ERROR_NULL_STRING,
+            ))),
         }
     }
 }
@@ -198,7 +222,9 @@ impl TryFrom<Option<usize>> for QueueSyncTimestamp {
     fn try_from(value: Option<usize>) -> Result<Self> {
         match value {
             Some(v) => Ok(Self::from(v)),
-            None => Err(Error::QueueSyncTimestampOutOfRange(String::from("<nil>"))),
+            None => Err(Error::QueueSyncTimestampOutOfRange(String::from(
+                ERROR_NULL_STRING,
+            ))),
         }
     }
 }
@@ -268,6 +294,15 @@ mod test {
             let actual = StoreCapacity::try_from(value).unwrap();
             assert_eq!(actual, StoreCapacity::Sized(isize::MAX as usize));
         }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_option_string_none() {
+            let v: Option<String> = None;
+            match StoreCapacity::try_from(v) {
+                Ok(StoreCapacity::Unlimited) => assert!(true),
+                _ => assert!(false),
+            }
+        }
     }
 
     mod queue_enabled {
@@ -320,6 +355,15 @@ mod test {
         }
 
         #[test]
+        fn test_queue_sync_timestamp_from_option_string_none() {
+            let v: Option<String> = None;
+            match QueueEnabled::try_from(v) {
+                Ok(v) => assert_eq!(v, QueueEnabled(false)),
+                _ => assert!(false),
+            }
+        }
+
+        #[test]
         fn test_string_from_queue_enabled_false() {
             assert_eq!(String::from(QueueEnabled(false)), "0");
         }
@@ -366,6 +410,15 @@ mod test {
                 QueueSyncTimestamp::try_from("123").unwrap(),
                 QueueSyncTimestamp(123)
             );
+        }
+
+        #[test]
+        fn test_queue_sync_timestamp_from_option_string_none() {
+            let v: Option<isize> = None;
+            match QueueSyncTimestamp::try_from(v) {
+                Err(Error::QueueSyncTimestampOutOfRange(v)) => assert_eq!(v, ERROR_NULL_STRING),
+                _ => assert!(false),
+            }
         }
 
         #[test]
