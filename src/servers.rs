@@ -65,7 +65,7 @@ fn make_https(host: &str, uri: Uri, https_port: u16) -> Result<Uri, BoxError> {
 
 /// Server that only redirects http to https
 pub async fn redirect_http_to_https(
-    http_port: u16,
+    addr: SocketAddr,
     https_port: u16,
     shutdown_handle: Handle,
 ) -> anyhow::Result<()> {
@@ -78,9 +78,6 @@ pub async fn redirect_http_to_https(
             }
         }
     };
-
-    // Listen on Socket addr/port
-    let addr = SocketAddr::from(([0, 0, 0, 0], http_port));
 
     // Start Axum server
     let mut server = axum_server::bind(addr);

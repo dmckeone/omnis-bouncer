@@ -173,25 +173,32 @@ async fn main() {
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new());
 
+    // TODO: Replace with better controls in Control App
     test_dynamic_upstreams(state.clone());
-
-    info!("Server running on http://localhost:3000");
-    info!("");
-    info!("Example curl commands:");
-    info!("  curl http://127.0.0.1:{}/", state.config.http_port);
-    info!("  curl https://127.0.0.1:{}/", state.config.https_port);
-    info!("  curl https://1270.0.0.1:{}/", state.config.control_port);
-    info!(
-        "  curl https://1270.0.0.1:{}/static/focus.jpg",
-        state.config.control_port
-    );
 
     let tls_config = RustlsConfig::from_pem(SELF_SIGNED_CERT.into(), SELF_SIGNED_KEY.into())
         .await
         .expect("Failed to read TLS certificate and key");
 
+    let upstream_upgrade_addr = SocketAddr::from(([0, 0, 0, 0], state.config.http_port));
     let upstream_addr = SocketAddr::from(([0, 0, 0, 0], state.config.https_port));
     let control_addr = SocketAddr::from(([0, 0, 0, 0], state.config.control_port));
+
+    info!(
+        "HTTP Server running on http://{}:{}",
+        upstream_upgrade_addr.ip(),
+        upstream_upgrade_addr.port()
+    );
+    info!(
+        "HTTPS Server running on https://{}:{}",
+        upstream_addr.ip(),
+        upstream_addr.port()
+    );
+    info!(
+        "HTTPS Control Server running on https://{}:{}",
+        control_addr.ip(),
+        control_addr.port()
+    );
 
     let exit = join!(
         shutdown_future,
@@ -208,8 +215,8 @@ async fn main() {
             control_app
         ),
         redirect_http_to_https(
-            state.config.http_port,
-            state.config.https_port,
+            upstream_upgrade_addr,
+            upstream_addr.port(),
             shutdown_handle.clone(),
         )
     );
