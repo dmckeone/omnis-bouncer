@@ -100,7 +100,7 @@ pub async fn reverse_proxy_handler(
         .collect();
 
     // Attach matching header (if REST API)
-    let header_name = state.config.header_name.clone();
+    let header_name = config.header_name.clone();
     response_headers.insert(
         HeaderName::from_lowercase(header_name.as_bytes())?,
         queue_token.clone().parse()?,
