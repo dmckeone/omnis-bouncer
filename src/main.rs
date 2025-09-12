@@ -216,12 +216,15 @@ async fn main() {
 
     // Exit results (ignored)
     if exit.0.is_err() {
-        error!("Failed to exit upstream server");
+        error!("Failed to exit signal handler");
     }
     if exit.1.is_err() {
-        error!("Failed to exit control server");
+        error!("Failed to exit upstream server");
     }
     if exit.2.is_err() {
+        error!("Failed to exit control server");
+    }
+    if exit.3.is_err() {
         error!("Failed to exit redirect server");
     }
 
