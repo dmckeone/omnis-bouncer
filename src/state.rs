@@ -1,4 +1,5 @@
 use reqwest::Client;
+use std::time::Duration;
 
 use crate::queue::QueueControl;
 use crate::upstream::UpstreamPool;
@@ -8,6 +9,7 @@ pub struct Config {
     pub app_name: String,
     pub cookie_name: String,
     pub header_name: String,
+    pub connect_timeout: Duration,
 }
 
 // Our app state type

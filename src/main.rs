@@ -71,7 +71,7 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
 #[tokio::main]
 async fn main() {
     // Initialize tracing
-    FmtSubscriber::builder()
+    tracing_subscriber::fmt()
         .with_max_level(Level::DEBUG)
         .with_target(false)
         .compact()
@@ -82,6 +82,7 @@ async fn main() {
         app_name: String::from("Omnis Bouncer"),
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
+        connect_timeout: Duration::from_secs(10),
     };
 
     // Create Redis Pool
@@ -109,7 +110,10 @@ async fn main() {
 
     // Create a new http client pool
     let client = Client::builder()
+        // .cookie_store(false) -- Disabled by default, unlesss "cookies" feature enabled
+        .connect_timeout(config.connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
+        .referer(false)
         .build()
         .expect("Failed to build HTTP client");
 
@@ -143,11 +147,11 @@ async fn main() {
     let app = app
         .layer(CookieManagerLayer::new())
         .layer(RequestDecompressionLayer::new())
-        .layer(CompressionLayer::new())
-        .layer(
-            // https://github.com/tokio-rs/axum/blob/main/examples/tracing-aka-logging/src/main.rs
-            TraceLayer::new_for_http(),
-        );
+        .layer(CompressionLayer::new());
+    // .layer(
+    //     // https://github.com/tokio-rs/axum/blob/main/examples/tracing-aka-logging/src/main.rs
+    //     TraceLayer::new_for_http(),
+    // );
 
     test_dynamic_upstreams(state.clone());
 

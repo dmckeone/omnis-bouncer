@@ -1,3 +1,5 @@
+use crate::errors::Result;
+use crate::state::AppState;
 use axum::extract::{Request, State};
 use axum::response::IntoResponse;
 use http::header::{
@@ -10,9 +12,7 @@ use reqwest;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower_cookies::{Cookie, Cookies};
-
-use crate::errors::Result;
-use crate::state::AppState;
+use tracing::debug;
 
 lazy_static! {
     static ref IGNORE: HashSet<HeaderName> = {
@@ -69,7 +69,7 @@ pub async fn reverse_proxy_handler(
     // Process Request on Upstream
     let client = &state.client;
     let response = client
-        .request(method, upstream_uri)
+        .request(method.clone(), upstream_uri.clone())
         .headers(headers.clone())
         .body(reqwest::Body::wrap_stream(body_stream))
         .send()
@@ -88,6 +88,8 @@ pub async fn reverse_proxy_handler(
         Some(v) => String::from(v.to_str()?),
         None => String::from("<unknown>"),
     };
+
+    debug!("{} {} -> {} -> {}", method, uri, upstream_uri, content_type);
 
     // Build Headers
     let mut response_headers: HeaderMap<HeaderValue> = response
