@@ -1,30 +1,54 @@
-use axum::http::header::CONTENT_TYPE;
-use axum::http::HeaderName;
-use axum::response::Response;
-use axum::{extract, middleware};
+use axum::extract::{Request, State};
+use axum::response::IntoResponse;
+use http::header::{
+    CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, PROXY_AUTHENTICATE,
+    PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+};
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use lazy_static::lazy_static;
+use reqwest;
+use std::collections::HashSet;
+use std::sync::Arc;
 use tower_cookies::{Cookie, Cookies};
-use tracing::info;
 
-use crate::errors;
+use crate::errors::Result;
 use crate::state::AppState;
 
-/// Inject the state into middleware extensions so it can be used in response handlers and
-/// other middleware
-pub async fn middleware(
-    extract::State(state): extract::State<AppState>,
+lazy_static! {
+    static ref IGNORE: HashSet<HeaderName> = {
+        let mut set = HashSet::new();
+        set.insert(CONTENT_LENGTH);
+        set.insert(CONTENT_ENCODING);
+        set.insert(CONNECTION);
+        set.insert(PROXY_AUTHENTICATE);
+        set.insert(PROXY_AUTHORIZATION);
+        set.insert(TE);
+        set.insert(TRAILER);
+        set.insert(TRANSFER_ENCODING);
+        set.insert(UPGRADE);
+
+        set
+    };
+}
+
+pub async fn reverse_proxy_handler(
+    State(state): State<Arc<AppState>>,
     cookies: Cookies,
-    req: extract::Request,
-    next: middleware::Next,
-) -> errors::Result<Response> {
-    let cookie_name = state.config.cookie_name.clone();
+    request: Request,
+) -> Result<impl IntoResponse> {
+    // Extract config
+    let state = state.clone();
+    let config = &state.config;
+    let cookie_name = config.cookie_name.clone();
 
+    // Clone properties of the request that are used
+    let method = request.method().clone();
+    let uri = request.uri().clone();
+    let headers = request.headers().clone();
+    let body_stream = request.into_body().into_data_stream();
+
+    // Extract cookies from the request
     let cookie = cookies.get(&cookie_name);
-    let method = req.method().clone();
-    let uri = req.uri().clone();
-
-    // Test retrieving something from redis
-    // let value = get_key(&state.redis).await?;
-    // info!("Received from Redis: {}", value);
 
     // Extract queue token from cookie
     let queue_token = match cookie.clone() {
@@ -32,8 +56,24 @@ pub async fn middleware(
         None => String::from(state.queue.new_id()),
     };
 
-    // Process request
-    let mut resp = next.run(req).await;
+    // Determine Proxy URI
+    let Some(upstream) = state.upstream_pool.first_uri().await else {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            HeaderMap::new(),
+            axum::body::Body::from("Service Unavailable"),
+        ));
+    };
+    let upstream_uri = format!("{}{}", upstream, uri);
+
+    // Process Request on Upstream
+    let client = &state.client;
+    let response = client
+        .request(method, upstream_uri)
+        .headers(headers.clone())
+        .body(reqwest::Body::wrap_stream(body_stream))
+        .send()
+        .await?;
 
     // Attach return cookie
     if cookie.is_none() {
@@ -44,18 +84,31 @@ pub async fn middleware(
     }
 
     // Extract content type -- maybe don't add header for certain types?
-    let content_type = match resp.headers().get(CONTENT_TYPE) {
+    let content_type = match response.headers().get(CONTENT_TYPE) {
         Some(v) => String::from(v.to_str()?),
         None => String::from("<unknown>"),
     };
 
+    // Build Headers
+    let mut response_headers: HeaderMap<HeaderValue> = response
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| match IGNORE.contains(k) {
+            true => None,
+            false => Some((k.to_owned(), v.to_owned())),
+        })
+        .collect();
+
     // Attach matching header (if REST API)
     let header_name = state.config.header_name.clone();
-    resp.headers_mut().insert(
+    response_headers.insert(
         HeaderName::from_lowercase(header_name.as_bytes())?,
         queue_token.clone().parse()?,
     );
 
-    info!("{} {} -> {} {}", method, uri, resp.status(), content_type);
-    Ok(resp)
+    // Copy all response headers except the ones in the ignore list
+    let response_status = response.status();
+    let response_body = axum::body::Body::from_stream(response.bytes_stream());
+
+    Ok((response_status, response_headers, response_body))
 }

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use reqwest::Client;
 
 use crate::queue::QueueControl;
 use crate::upstream::UpstreamPool;
@@ -11,9 +11,9 @@ pub struct Config {
 }
 
 // Our app state type
-#[derive(Clone)]
 pub struct AppState {
-    pub config: Arc<Config>,
-    pub queue: Arc<QueueControl>,
-    pub upstream_pool: Arc<UpstreamPool>,
+    pub config: Config,
+    pub queue: QueueControl,
+    pub upstream_pool: UpstreamPool,
+    pub client: Client,
 }

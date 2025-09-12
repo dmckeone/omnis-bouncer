@@ -1,15 +1,12 @@
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
-use std::task::Waker;
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use tracing::error;
 
 /// Single upstream server
 #[derive(Clone)]
 pub struct Upstream {
     pub id: usize,
     pub uri: String,
-    pub available: bool,
     pub removed: bool,
 }
 
@@ -18,13 +15,8 @@ impl Upstream {
         Self {
             id,
             uri: uri.into(),
-            available: false,
             removed: false,
         }
-    }
-
-    pub fn mark_available(&mut self) {
-        self.available = true;
     }
 }
 
@@ -47,6 +39,13 @@ impl UpstreamPool {
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
+    pub async fn first_uri(&self) -> Option<String> {
+        let guard = self._read_lock().await;
+        let upstreams = guard.deref();
+        upstreams.first_uri()
+    }
+
+    /// Return a vector of tuples with the ID and URI of all active pool URIs
     pub async fn current_uris(&self) -> Vec<(usize, String)> {
         let guard = self._read_lock().await;
         let upstreams = guard.deref();
@@ -63,7 +62,6 @@ impl UpstreamPool {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
         upstreams.add_uris(uris);
-        upstreams.wake();
     }
 
     /// Remove a vector of upstream URIs from the pool
@@ -71,41 +69,12 @@ impl UpstreamPool {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
         upstreams.remove_uris(uris);
-        upstreams.wake();
     }
-
-    /// Get result of the next discovery poll call (and allow optional waker)
-    ///
-    /// Intended for use with [futures_core polls](https://docs.rs/futures-core/0.3.31/futures_core/stream/trait.Stream.html)
-    pub fn discovery_poll(&self, waker: Option<Waker>) -> PoolPoll {
-        match self.pool.try_write() {
-            Ok(mut guard) => {
-                let upstreams = guard.deref_mut();
-                // Optionally set waker if available
-                if let Some(waker) = waker {
-                    upstreams.waker = Some(waker);
-                }
-                upstreams.next_poll()
-            }
-            Err(e) => {
-                error!("Unable to lock for poll: {}", e);
-                PoolPoll::NoChange
-            }
-        }
-    }
-}
-
-/// Pool polling status, when using with async streams
-pub enum PoolPoll {
-    Insert(usize, String),
-    Remove(usize),
-    NoChange,
 }
 
 // Internal pool structure with no locking
 struct Pool {
     pool: Vec<Upstream>,
-    waker: Option<Waker>,
     next_id: usize,
 }
 
@@ -114,51 +83,22 @@ impl Pool {
     fn new() -> Self {
         Self {
             pool: Vec::new(),
-            waker: None,
             next_id: 1,
         }
+    }
+
+    /// vector of all current IDs and URIs in the pool
+    fn first_uri(&self) -> Option<String> {
+        self.pool.iter().find(|u| !u.removed).map(|u| u.uri.clone())
     }
 
     /// vector of all current IDs and URIs in the pool
     fn current_uris(&self) -> Vec<(usize, String)> {
         self.pool
             .iter()
-            .filter(|u| u.available && !u.removed)
+            .filter(|u| !u.removed)
             .map(|u| (u.id, u.uri.clone()))
             .collect()
-    }
-
-    /// index and mutable upstream to return on the next discovery poll
-    fn next_poll(&mut self) -> PoolPoll {
-        let item = self
-            .pool
-            .iter_mut()
-            .enumerate()
-            .find(|(_, u)| !u.available || u.removed);
-
-        if let Some((idx, upstream)) = item {
-            let id = upstream.id;
-            if upstream.removed {
-                self.remove_pool_index(idx);
-                return PoolPoll::Remove(id);
-            } else if !upstream.available {
-                upstream.mark_available();
-                return PoolPoll::Insert(id, upstream.uri.clone());
-            }
-        }
-
-        PoolPoll::NoChange
-    }
-
-    /// Trigger the waker, if a waker has been assigned
-    fn wake(&self) {
-        if let Some(w) = self.waker.clone() {
-            w.wake();
-        }
-    }
-
-    fn remove_pool_index(&mut self, index: usize) {
-        self.pool.remove(index);
     }
 
     /// Add 1+ URIs to the upstream pool
@@ -181,11 +121,7 @@ impl Pool {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = uris.iter().cloned().collect();
 
-        // Mark all servers that have been removed
-        for server in self.pool.iter_mut() {
-            if uri_set.contains(&server.uri) {
-                server.removed = true;
-            }
-        }
+        // Strip all matching URIs from the set
+        self.pool.retain(|server| !uri_set.contains(&server.uri));
     }
 }

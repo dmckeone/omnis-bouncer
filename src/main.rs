@@ -1,16 +1,14 @@
 mod api;
 mod constants;
 mod database;
-mod discovery;
 mod errors;
 mod queue;
 mod reverse_proxy;
 mod state;
 mod upstream;
 
-use axum::{middleware, serve, Router};
-use axum_reverse_proxy::DiscoverableBalancedProxy;
-use hyper_util::client::legacy::{connect::HttpConnector, Client};
+use axum::{serve, Router};
+use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
@@ -24,14 +22,13 @@ use tracing_subscriber::FmtSubscriber;
 
 use crate::constants::STATIC_ASSETS_DIR;
 use crate::database::create_redis_pool;
-use crate::discovery::UpstreamPoolStream;
 use crate::queue::QueueControl;
+use crate::reverse_proxy::reverse_proxy_handler;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
 
 // Testing functions for adding dynamic upstream values
-fn test_dynamic_upstreams(state: &AppState) {
-    let state = state.clone();
+fn test_dynamic_upstreams(state: Arc<AppState>) {
     tokio::task::spawn(async move {
         // Wait 1 second to simulate a user change
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -45,6 +42,7 @@ fn test_dynamic_upstreams(state: &AppState) {
                 String::from("http://127.0.0.1:63113"),
             ])
             .await;
+        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -57,6 +55,7 @@ fn test_dynamic_upstreams(state: &AppState) {
                 String::from("http://127.0.0.1:63113"),
             ])
             .await;
+        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -65,11 +64,7 @@ fn test_dynamic_upstreams(state: &AppState) {
             .upstream_pool
             .add_upstreams(&[String::from("http://127.0.0.1:63111")])
             .await;
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        let current_uris = state.upstream_pool.current_uris().await;
-        info!("Pool State: {:?}", current_uris)
+        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
     });
 }
 
@@ -83,11 +78,11 @@ async fn main() {
         .init();
 
     // Build Config
-    let config = Arc::new(Config {
+    let config = Config {
         app_name: String::from("Omnis Bouncer"),
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
-    });
+    };
 
     // Create Redis Pool
     let redis = match create_redis_pool("redis://127.0.0.1") {
@@ -112,55 +107,37 @@ async fn main() {
         return;
     };
 
+    // Create a new http client pool
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("Failed to build HTTP client");
+
+    let upstream_pool = UpstreamPool::new();
+
     // Create our app state
-    let state = AppState {
+    let state = Arc::new(AppState {
         config,
-        queue: Arc::new(queue),
-        upstream_pool: Arc::new(UpstreamPool::new()),
-    };
+        queue,
+        upstream_pool,
+        client,
+    });
 
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
-    // Create a pool discovery stream for dynamic URI addition and removal
-    let pool_stream = UpstreamPoolStream::new(state.upstream_pool.clone());
-
-    // Create an HTTP client
-    let mut connector = HttpConnector::new();
-    connector.set_nodelay(true);
-    connector.enforce_http(false);
-    connector.set_keepalive(Some(std::time::Duration::from_secs(60)));
-    connector.set_connect_timeout(Some(std::time::Duration::from_secs(10)));
-    connector.set_reuse_address(true);
-
-    let client = Client::builder(hyper_util::rt::TokioExecutor::new())
-        .pool_idle_timeout(Duration::from_secs(60))
-        .pool_max_idle_per_host(32)
-        .retry_canceled_requests(true)
-        .set_host(true)
-        .build(connector);
-
-    // Create proxy, kickstart discovery, and return to immutable
-    let mut proxy = DiscoverableBalancedProxy::new_with_client("/", client, pool_stream);
-    proxy.start_discovery().await;
-    let proxy = proxy;
-
-    // Create the reverse proxy with the queue injection middleware
-    let proxy_router: Router = proxy.into();
-    let proxy_router = proxy_router.layer(middleware::from_fn_with_state(
-        state.clone(),
-        reverse_proxy::middleware,
-    ));
-
     // Create our main router with app state
-    let app = Router::new().with_state(state.clone());
+    let app = Router::new();
 
     let app = app
         .nest("/_omnisbouncer", api::router(state.clone()))
         .nest_service("/_omnisbouncer/static", static_service);
 
-    // Add middleware stack
-    let app = app.merge(proxy_router);
+    // Add fallback
+    let app = app.fallback(reverse_proxy_handler);
+
+    // Add state (must be last)
+    let app = app.with_state(state.clone());
 
     // Add utility layers
     let app = app
@@ -172,7 +149,7 @@ async fn main() {
             TraceLayer::new_for_http(),
         );
 
-    test_dynamic_upstreams(&state);
+    test_dynamic_upstreams(state.clone());
 
     // Create a TCP listener
     let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
