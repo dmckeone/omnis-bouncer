@@ -1,22 +1,25 @@
-use crate::errors::Result;
-use crate::state::AppState;
-use axum::extract::{Request, State};
+use axum::extract::{OriginalUri, Request, State};
 use axum::response::IntoResponse;
 use http::header::{
-    CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, PROXY_AUTHENTICATE,
-    PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+    ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+    PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+    UPGRADE_INSECURE_REQUESTS,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use lazy_static::lazy_static;
-use reqwest;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tower_cookies::{Cookie, Cookies};
-use tracing::debug;
+use tracing::{debug, info};
+
+use crate::errors::Result;
+use crate::state::AppState;
 
 lazy_static! {
-    static ref IGNORE: HashSet<HeaderName> = {
+    static ref REQUEST_IGNORE: HashSet<HeaderName> = {
         let mut set = HashSet::new();
+        set.insert(ACCEPT);
+        set.insert(ACCEPT_ENCODING);
         set.insert(CONTENT_LENGTH);
         set.insert(CONTENT_ENCODING);
         set.insert(CONNECTION);
@@ -26,6 +29,27 @@ lazy_static! {
         set.insert(TRAILER);
         set.insert(TRANSFER_ENCODING);
         set.insert(UPGRADE);
+        set.insert(UPGRADE_INSECURE_REQUESTS);
+
+        set
+    };
+}
+
+lazy_static! {
+    static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
+        let mut set = HashSet::new();
+        set.insert(ACCEPT);
+        set.insert(ACCEPT_ENCODING);
+        set.insert(CONTENT_LENGTH);
+        set.insert(CONTENT_ENCODING);
+        set.insert(CONNECTION);
+        set.insert(PROXY_AUTHENTICATE);
+        set.insert(PROXY_AUTHORIZATION);
+        set.insert(TE);
+        set.insert(TRAILER);
+        set.insert(TRANSFER_ENCODING);
+        set.insert(UPGRADE);
+        set.insert(UPGRADE_INSECURE_REQUESTS);
 
         set
     };
@@ -33,7 +57,10 @@ lazy_static! {
 
 pub async fn reverse_proxy_handler(
     State(state): State<Arc<AppState>>,
+    method: Method,
     cookies: Cookies,
+    headers: HeaderMap,
+    uri: OriginalUri,
     request: Request,
 ) -> Result<impl IntoResponse> {
     // Extract config
@@ -42,9 +69,7 @@ pub async fn reverse_proxy_handler(
     let cookie_name = config.cookie_name.clone();
 
     // Clone properties of the request that are used
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let headers = request.headers().clone();
+    let path = uri.path_and_query().unwrap();
     let body_stream = request.into_body().into_data_stream();
 
     // Extract cookies from the request
@@ -64,7 +89,8 @@ pub async fn reverse_proxy_handler(
             axum::body::Body::from("Service Unavailable"),
         ));
     };
-    let upstream_uri = format!("{}{}", upstream, uri);
+    let upstream_uri = format!("{}{:?}", upstream, path);
+    info!("Selected URI: {}", upstream_uri);
 
     // Process Request on Upstream
     let client = &state.client;
@@ -89,13 +115,16 @@ pub async fn reverse_proxy_handler(
         None => String::from("<unknown>"),
     };
 
-    debug!("{} {} -> {} -> {}", method, uri, upstream_uri, content_type);
+    debug!(
+        "{} {} -> {} -> {}",
+        method, path, upstream_uri, content_type
+    );
 
     // Build Headers
     let mut response_headers: HeaderMap<HeaderValue> = response
         .headers()
         .iter()
-        .filter_map(|(k, v)| match IGNORE.contains(k) {
+        .filter_map(|(k, v)| match UPSTREAM_IGNORE.contains(k) {
             true => None,
             false => Some((k.to_owned(), v.to_owned())),
         })
@@ -107,6 +136,7 @@ pub async fn reverse_proxy_handler(
         HeaderName::from_lowercase(header_name.as_bytes())?,
         queue_token.clone().parse()?,
     );
+    info!("Response Headers: {:?}", response_headers);
 
     // Copy all response headers except the ones in the ignore list
     let response_status = response.status();

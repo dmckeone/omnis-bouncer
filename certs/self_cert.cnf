@@ -1,0 +1,35 @@
+[req]
+default_bits = 4096
+prompt = no
+default_md = sha256
+distinguished_name = dn
+
+[dn]
+C=CA
+ST=Alberta
+L=Calgary
+O=Local Inc.
+OU=Local
+emailAddress=me@localhost
+CN=localhost
+
+[req_ext]
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints=CA:FALSE
+extendedKeyUsage=serverAuth, clientAuth
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+subjectAltName = @alt_names
+
+[ req_server_csr_x509_extensions ]
+basicConstraints = CA:false
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+nsCertType = server
+# PKIX recommendations harmless if included in all certificates.
+nsComment = "SSL Generated Certificate"
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1

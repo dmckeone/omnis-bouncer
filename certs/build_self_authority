@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+
+#
+# Add to trust chain
+#
+# OS X (Safari and Chrome):
+#
+#   sudo security add-trusted-cert -d -r trustRoot -k "/Library/Keychains/System.keychain" root.crt
+#
+#
+# Firefox:
+#
+#   Options/Preferences -> Privacy & Security -> Certificates: View Certificates -> Import -> "Authorities" tab -> Select root.crt
+#
+#   WARNING: Also verify that older certificates are removed first.  Expired CA certs can interfere
+#            with newly imported CA certs.
+#
+
+# Ensure OpenSSL 3+
+openssl_bin=openssl
+
+# Outputs
+root_certificate_file="self_authority/root.crt"
+root_key_file="self_authority/root.key"
+root_pfx_file="self_authority/root.pfx"
+
+# Export password
+password=dummypassword
+
+# SSL Properties
+key_bits=4096
+days=398   # https://thehackernews.com/2020/09/ssl-tls-certificate-validity-398.html
+
+# CA details
+domain=localhost
+country=CA
+state=Alberta
+locality=Calgary
+organization="Local Inc."
+organizational_unit="Local"
+email=me@localhost
+
+# Temporal details
+subject="/C=$country/ST=$state/L=$locality/O=$organization/OU=$organizational_unit/CN=$domain/emailAddress=$email"
+
+# Generate a CA root key
+echo "Generating key request for CA"
+$openssl_bin genrsa -traditional -aes256 -passout pass:$password -out "$root_key_file" $key_bits
+
+# Remove passphrase from the CA root key.
+echo "Removing passphrase from CA key"
+$openssl_bin rsa -in "$root_key_file" -passin pass:$password -out "$root_key_file"
+
+# Create a CA root certificate
+echo "Creating CA certificate"
+$openssl_bin req -x509 -new -sha256 -key "$root_key_file" -days $days -out  "$root_certificate_file" -subj "$subject"
+
+# Create the bundled pfx
+echo "Generating .pfx"
+$openssl_bin pkcs12 -export -out $root_pfx_file -password pass:$password -inkey $root_key_file -in $root_certificate_file

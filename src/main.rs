@@ -1,29 +1,32 @@
-mod api;
 mod constants;
+mod control;
 mod database;
 mod errors;
 mod queue;
 mod reverse_proxy;
+mod servers;
+mod signals;
 mod state;
 mod upstream;
 
-use axum::{serve, Router};
+use axum::Router;
+use axum_server::tls_rustls::RustlsConfig;
+use axum_server::Handle;
 use reqwest::Client;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpListener;
+use tokio::join;
 use tower_cookies::CookieManagerLayer;
-use tower_http::{
-    compression::CompressionLayer, decompression::RequestDecompressionLayer, trace::TraceLayer,
-};
-use tower_serve_static::ServeDir;
+use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info, Level};
-use tracing_subscriber::FmtSubscriber;
 
-use crate::constants::STATIC_ASSETS_DIR;
+use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
 use crate::database::create_redis_pool;
 use crate::queue::QueueControl;
 use crate::reverse_proxy::reverse_proxy_handler;
+use crate::servers::{redirect_http_to_https, secure_server};
+use crate::signals::shutdown_signal;
 use crate::state::{AppState, Config};
 use crate::upstream::UpstreamPool;
 
@@ -77,12 +80,24 @@ async fn main() {
         .compact()
         .init();
 
+    // Install crypto provider guard (must be early in app startup)
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install aws_lc_rs for crypto provider");
+
+    // Create a shutdown handle for graceful shutdown  (must be early in app startup)
+    let shutdown_handle = Handle::new();
+    let shutdown_future = shutdown_signal(shutdown_handle.clone());
+
     // Build Config
     let config = Config {
         app_name: String::from("Omnis Bouncer"),
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
+        http_port: 3000,
+        https_port: 3001,
+        control_port: 2999,
     };
 
     // Create Redis Pool
@@ -127,46 +142,72 @@ async fn main() {
         client,
     });
 
-    // Support static file handling from /static directory that is embedded in the final binary
-    let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
-
-    // Create our main router with app state
-    let app = Router::new();
-
-    let app = app
-        .nest("/_omnisbouncer", api::router(state.clone()))
-        .nest_service("/_omnisbouncer/static", static_service);
-
-    // Add fallback
-    let app = app.fallback(reverse_proxy_handler);
-
-    // Add state (must be last)
-    let app = app.with_state(state.clone());
-
-    // Add utility layers
-    let app = app
+    // Create apps
+    let control_app: Router = control::router(state.clone())
+        // .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new());
-    // .layer(
-    //     // https://github.com/tokio-rs/axum/blob/main/examples/tracing-aka-logging/src/main.rs
-    //     TraceLayer::new_for_http(),
-    // );
+
+    let upstream_app: Router = Router::new()
+        .fallback(reverse_proxy_handler)
+        .with_state(state.clone())
+        // .layer(TraceLayer::new_for_http())
+        .layer(CookieManagerLayer::new())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new());
 
     test_dynamic_upstreams(state.clone());
 
-    // Create a TCP listener
-    let listener = TcpListener::bind("0.0.0.0:3000").await.unwrap();
     info!("Server running on http://localhost:3000");
-    info!("Try:");
-    info!("  - GET /                -> Reverse Proxy");
-    info!("  - GET /_omnisbouncer   -> Omnis Bouncer control");
     info!("");
     info!("Example curl commands:");
-    info!("  curl http://127.0.0.1:3000/");
-    info!("  curl http://1270.0.0.1:3000/_omnisbouncer");
-    info!("  curl http://1270.0.0.1:3000/_omnisbouncer/static/focus.jpg");
+    info!("  curl http://127.0.0.1:{}/", state.config.http_port);
+    info!("  curl https://127.0.0.1:{}/", state.config.https_port);
+    info!("  curl https://1270.0.0.1:{}/", state.config.control_port);
+    info!(
+        "  curl https://1270.0.0.1:{}/static/focus.jpg",
+        state.config.control_port
+    );
 
-    // Run the server
-    serve(listener, app).await.unwrap();
+    let tls_config = RustlsConfig::from_pem(SELF_SIGNED_CERT.into(), SELF_SIGNED_KEY.into())
+        .await
+        .expect("Failed to read TLS certificate and key");
+
+    let upstream_addr = SocketAddr::from(([0, 0, 0, 0], state.config.https_port));
+    let control_addr = SocketAddr::from(([0, 0, 0, 0], state.config.control_port));
+
+    let exit = join!(
+        shutdown_future,
+        secure_server(
+            upstream_addr,
+            tls_config.clone(),
+            shutdown_handle.clone(),
+            upstream_app
+        ),
+        secure_server(
+            control_addr,
+            tls_config.clone(),
+            shutdown_handle.clone(),
+            control_app
+        ),
+        redirect_http_to_https(
+            state.config.http_port,
+            state.config.https_port,
+            shutdown_handle.clone(),
+        )
+    );
+
+    // Exit results (ignored)
+    if exit.0.is_err() {
+        error!("Failed to exit upstream server");
+    }
+    if exit.1.is_err() {
+        error!("Failed to exit control server");
+    }
+    if exit.2.is_err() {
+        error!("Failed to exit redirect server");
+    }
+
+    info!("Shutdown complete");
 }

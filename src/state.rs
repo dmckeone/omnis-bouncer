@@ -10,6 +10,9 @@ pub struct Config {
     pub cookie_name: String,
     pub header_name: String,
     pub connect_timeout: Duration,
+    pub http_port: u16,
+    pub https_port: u16,
+    pub control_port: u16,
 }
 
 // Our app state type
