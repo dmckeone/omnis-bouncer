@@ -9,7 +9,9 @@ mod signals;
 mod state;
 mod upstream;
 
+use axum::routing::get;
 use axum::Router;
+use axum_response_cache::CacheLayer;
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
 use reqwest::Client;
@@ -75,7 +77,7 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
 async fn main() {
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::INFO)
         .with_target(false)
         .compact()
         .init();
@@ -95,6 +97,7 @@ async fn main() {
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
+        asset_cache_secs: Duration::from_secs(60),
         http_port: 3000,
         https_port: 3001,
         control_port: 2999,
@@ -149,7 +152,20 @@ async fn main() {
         .layer(RequestDecompressionLayer::new())
         .layer(CompressionLayer::new());
 
+    // Cache assets for 60 seconds,  reducing load on backend server
+    let asset_cache =
+        CacheLayer::with_lifespan(state.config.asset_cache_secs).use_stale_on_failure();
+
+    // Upstream routing
     let upstream_app: Router = Router::new()
+        .route("/favicon.ico", get(reverse_proxy_handler))
+        .route("/jschtml/css/{*key}", get(reverse_proxy_handler))
+        .route("/jschtml/fonts/{*key}", get(reverse_proxy_handler))
+        .route("/jschtml/icons/{*key}", get(reverse_proxy_handler))
+        .route("/jschtml/images/{*key}", get(reverse_proxy_handler))
+        .route("/jschtml/scripts/{*key}", get(reverse_proxy_handler))
+        .route("/jschtml/themes/{*key}", get(reverse_proxy_handler))
+        .route_layer(asset_cache)
         .fallback(reverse_proxy_handler)
         .with_state(state.clone())
         // .layer(TraceLayer::new_for_http())

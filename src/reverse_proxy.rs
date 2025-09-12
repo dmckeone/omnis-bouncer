@@ -90,7 +90,6 @@ pub async fn reverse_proxy_handler(
         ));
     };
     let upstream_uri = format!("{}{:?}", upstream, path);
-    info!("Selected URI: {}", upstream_uri);
 
     // Process Request on Upstream
     let client = &state.client;
@@ -115,7 +114,7 @@ pub async fn reverse_proxy_handler(
         None => String::from("<unknown>"),
     };
 
-    debug!(
+    info!(
         "{} {} -> {} -> {}",
         method, path, upstream_uri, content_type
     );
@@ -136,7 +135,6 @@ pub async fn reverse_proxy_handler(
         HeaderName::from_lowercase(header_name.as_bytes())?,
         queue_token.clone().parse()?,
     );
-    info!("Response Headers: {:?}", response_headers);
 
     // Copy all response headers except the ones in the ignore list
     let response_status = response.status();
