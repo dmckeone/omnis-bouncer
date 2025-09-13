@@ -30,7 +30,7 @@ use crate::reverse_proxy::reverse_proxy_handler;
 use crate::servers::{redirect_http_to_https, secure_server};
 use crate::signals::shutdown_signal;
 use crate::state::{AppState, Config};
-use crate::upstream::UpstreamPool;
+use crate::upstream::{Upstream, UpstreamPool};
 
 // Testing functions for adding dynamic upstream values
 fn test_dynamic_upstreams(state: Arc<AppState>) {
@@ -42,9 +42,9 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
         state
             .upstream_pool
             .add_upstreams(&[
-                String::from("http://127.0.0.1:63111"),
-                String::from("http://127.0.0.1:63112"),
-                String::from("http://127.0.0.1:63113"),
+                Upstream::new(String::from("http://127.0.0.1:63111"), Some(5)),
+                Upstream::new(String::from("http://127.0.0.1:63112"), Some(3)),
+                Upstream::new(String::from("http://127.0.0.1:63113"), Some(1)),
             ])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
@@ -54,7 +54,7 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
         info!("Remove");
         state
             .upstream_pool
-            .remove_upstreams(&[
+            .remove_uris(&[
                 String::from("http://127.0.0.1:63111"),
                 String::from("http://127.0.0.1:63112"),
                 String::from("http://127.0.0.1:63113"),
@@ -67,7 +67,10 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
         info!("Re-add");
         state
             .upstream_pool
-            .add_upstreams(&[String::from("http://127.0.0.1:63111")])
+            .add_upstreams(&[Upstream::new(
+                String::from("http://127.0.0.1:63111"),
+                Some(10),
+            )])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
     });

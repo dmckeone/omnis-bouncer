@@ -1,22 +1,50 @@
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
+use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
 
-/// Single upstream server
+/// Upstream specification
 #[derive(Clone)]
 pub struct Upstream {
-    pub id: usize,
     pub uri: String,
-    pub removed: bool,
+    pub clients: usize,
 }
 
 impl Upstream {
-    fn new(id: usize, uri: impl Into<String>) -> Self {
+    pub fn new(uri: impl Into<String>, clients: Option<usize>) -> Self {
+        Self {
+            uri: uri.into(),
+            clients: clients.unwrap_or(1),
+        }
+    }
+}
+
+/// Single backend server
+struct UpstreamInner {
+    id: usize,
+    max_clients: usize,
+    sempahore: Arc<Semaphore>,
+    uri: String,
+    removed: bool,
+}
+
+impl UpstreamInner {
+    fn new(id: usize, upstream: Upstream) -> Self {
         Self {
             id,
-            uri: uri.into(),
+            max_clients: upstream.clients,
+            sempahore: Arc::new(Semaphore::new(upstream.clients)),
+            uri: upstream.uri,
             removed: false,
         }
+    }
+
+    fn current_clients(&self) -> usize {
+        self.max_clients - self.sempahore.available_permits()
+    }
+
+    fn full(&self) -> bool {
+        self.sempahore.available_permits() == 0
     }
 }
 
@@ -38,11 +66,18 @@ impl UpstreamPool {
         self.pool.read().await
     }
 
-    /// Return a vector of tuples with the ID and URI of all active pool URIs
-    pub async fn first_uri(&self) -> Option<String> {
+    /// Return the next available URI in the pool, along with the permit to use it
+    pub async fn least_busy_uri(&self) -> Option<String> {
         let guard = self._read_lock().await;
         let upstreams = guard.deref();
-        upstreams.first_uri()
+        upstreams.least_busy_uri()
+    }
+
+    /// Return the next available URI in the pool, along with the permit to use it
+    pub async fn acquire_next_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
+        let guard = self._read_lock().await;
+        let upstreams = guard.deref();
+        upstreams.acquire_next_uri()
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
@@ -58,14 +93,14 @@ impl UpstreamPool {
     }
 
     /// Add a vector of upstream URIs to the pool
-    pub async fn add_upstreams(&self, uris: &[String]) {
+    pub async fn add_upstreams(&self, uris: &[Upstream]) {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
-        upstreams.add_uris(uris);
+        upstreams.add_upstreams(uris);
     }
 
-    /// Remove a vector of upstream URIs from the pool
-    pub async fn remove_upstreams(&self, uris: &[String]) {
+    /// Remove a vector of URIs from the pool
+    pub async fn remove_uris(&self, uris: &[String]) {
         let mut guard = self._write_lock().await;
         let upstreams = guard.deref_mut();
         upstreams.remove_uris(uris);
@@ -74,7 +109,7 @@ impl UpstreamPool {
 
 // Internal pool structure with no locking
 struct Pool {
-    pool: Vec<Upstream>,
+    pool: Vec<UpstreamInner>,
     next_id: usize,
 }
 
@@ -87,9 +122,33 @@ impl Pool {
         }
     }
 
-    /// vector of all current IDs and URIs in the pool
-    fn first_uri(&self) -> Option<String> {
-        self.pool.iter().find(|u| !u.removed).map(|u| u.uri.clone())
+    // Get the URI with least busy sempahore (useful for asset loading where the lock is less critical)
+    fn least_busy_uri(&self) -> Option<String> {
+        let mut upstreams: Vec<_> = self.pool.iter().filter(|u| !u.removed).collect();
+        if upstreams.len() == 0 {
+            return None;
+        }
+
+        // Sort for least busy upstream server
+        upstreams.sort_by_cached_key(|u| u.current_clients());
+
+        match upstreams.first() {
+            Some(u) => Some(u.uri.clone()),
+            None => None,
+        }
+    }
+
+    /// Locked URI
+    fn acquire_next_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
+        let upstreams = self.pool.iter().filter(|u| !u.removed && !u.full());
+        for upstream in upstreams {
+            let permit = upstream.sempahore.clone().try_acquire_owned();
+            if permit.is_ok() {
+                return Some((permit.unwrap(), upstream.uri.clone()));
+            }
+        }
+
+        None
     }
 
     /// vector of all current IDs and URIs in the pool
@@ -102,16 +161,17 @@ impl Pool {
     }
 
     /// Add 1+ URIs to the upstream pool
-    fn add_uris(&mut self, uris: &[String]) {
+    fn add_upstreams(&mut self, upstreams: &[Upstream]) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = self.pool.iter().map(|s| s.uri.clone()).collect();
 
         // Push new upstream instance
-        for uri in uris {
-            if uri_set.contains(uri) {
+        for upstream in upstreams {
+            if uri_set.contains(&upstream.uri) {
                 continue;
             }
-            self.pool.push(Upstream::new(self.next_id, uri));
+            self.pool
+                .push(UpstreamInner::new(self.next_id, upstream.clone()));
             self.next_id += 1;
         }
     }

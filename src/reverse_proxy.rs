@@ -81,8 +81,17 @@ pub async fn reverse_proxy_handler(
         None => String::from(state.queue.new_id()),
     };
 
+    // TODO: Create conditional for loading assets via unlocked asset_uri
+    let Some(asset_uri) = state.upstream_pool.least_busy_uri().await else {
+        return Ok((
+            StatusCode::SERVICE_UNAVAILABLE,
+            HeaderMap::new(),
+            axum::body::Body::from("Service Unavailable"),
+        ));
+    };
+
     // Determine Proxy URI
-    let Some(upstream) = state.upstream_pool.first_uri().await else {
+    let Some((_permit, upstream)) = state.upstream_pool.acquire_next_uri().await else {
         return Ok((
             StatusCode::SERVICE_UNAVAILABLE,
             HeaderMap::new(),
