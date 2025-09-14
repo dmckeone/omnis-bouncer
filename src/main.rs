@@ -140,7 +140,7 @@ async fn main() {
         .build()
         .expect("Failed to build HTTP client");
 
-    let upstream_pool = UpstreamPool::new();
+    let upstream_pool = UpstreamPool::new(config.sticky_session_timeout);
 
     // Create our app state
     let state = Arc::new(AppState {

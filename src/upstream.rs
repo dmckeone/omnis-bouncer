@@ -1,9 +1,11 @@
 use dashmap::DashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
-use std::time::Instant;
-use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
+use std::time::{Duration, Instant};
+use tokio::sync::{
+    Mutex, OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore,
+};
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -61,9 +63,13 @@ struct UpstreamInner {
     max_connections: usize,
     permits: Arc<Semaphore>,
     max_sticky: usize,
-    sticky: DashMap<Uuid, Instant>,
+    sticky: Arc<RwLock<HashMap<Uuid, Instant>>>,
     uri: String,
     removed: bool,
+}
+
+enum UpstreamStickyError {
+    Full,
 }
 
 impl UpstreamInner {
@@ -73,18 +79,38 @@ impl UpstreamInner {
             max_connections: upstream.connections,
             permits: Arc::new(Semaphore::new(upstream.connections)),
             max_sticky: upstream.clients,
-            sticky: DashMap::with_capacity(upstream.clients),
+            sticky: Arc::new(RwLock::new(HashMap::with_capacity(upstream.clients))),
             uri: upstream.uri,
             removed: false,
         }
     }
 
-    fn current_sticky(&self) -> usize {
-        self.sticky.len()
+    async fn contains_id(&self, id: &Uuid) -> bool {
+        let guard = self.sticky.read().await;
+        guard.contains_key(id)
     }
 
-    fn full_sticky(&self) -> bool {
-        self.sticky.len() >= self.max_sticky
+    async fn current_sticky(&self) -> usize {
+        let guard = self.sticky.read().await;
+        guard.len()
+    }
+
+    async fn try_add_sticky(&self, id: &Uuid) -> Result<(), UpstreamStickyError> {
+        let mut guard = self.sticky.write().await;
+        if guard.len() >= self.max_sticky {
+            return Err(UpstreamStickyError::Full);
+        }
+        guard.insert(*id, Instant::now());
+        Ok(())
+    }
+
+    async fn expire_sticky(&self, now: Instant, expiry: Duration) {
+        let mut guard = self.sticky.write().await;
+        guard.retain(|_, i| now.duration_since(*i) < expiry);
+    }
+
+    async fn full_sticky(&self) -> bool {
+        self.current_sticky().await >= self.max_sticky
     }
 
     fn current_connections(&self) -> usize {
@@ -99,13 +125,15 @@ impl UpstreamInner {
 // Locked pool of upstream servers (controls locking for public usage)
 pub struct UpstreamPool {
     pool: RwLock<Pool>,
+    sticky_expiry_secs: Duration,
 }
 
 impl UpstreamPool {
     /// Create a new pool of upstream servers
-    pub fn new() -> Self {
+    pub fn new(sticky_expiry_secs: Duration) -> Self {
         Self {
             pool: RwLock::new(Pool::new()),
+            sticky_expiry_secs,
         }
     }
 
@@ -139,6 +167,7 @@ impl UpstreamPool {
         let result = {
             let guard = self._read_lock().await;
             let upstreams = guard.deref();
+            upstreams.expire_sticky(self.sticky_expiry_secs).await;
             upstreams.acquire_sticky_uri(id).await
         };
 
@@ -198,16 +227,12 @@ impl Pool {
         }
     }
 
-    fn non_sticky_filter() -> fn(&&UpstreamInner) -> bool {
+    fn acquire_filter() -> fn(&&UpstreamInner) -> bool {
         |u| !u.removed && !u.full()
     }
 
-    fn sticky_filter() -> fn(&&UpstreamInner) -> bool {
-        |u| !u.removed && !u.full() && !u.full_sticky()
-    }
-
     async fn acquire_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
-        for upstream in self.pool.iter().filter(Self::non_sticky_filter()) {
+        for upstream in self.pool.iter().filter(Self::acquire_filter()) {
             if let Ok(permit) = upstream.permits.clone().try_acquire_owned() {
                 return Some((permit, upstream.uri.clone()));
             }
@@ -216,13 +241,14 @@ impl Pool {
     }
 
     async fn acquire_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
-        match self.pool.iter().find(|u| u.sticky.contains_key(id)) {
-            Some(upstream) => {
+        for upstream in self.pool.iter() {
+            if upstream.contains_id(id).await {
                 info!("Re-use sticky UUID: {}", id);
-                Self::existing_sticky_uri(upstream)
+                return Self::existing_sticky_uri(upstream);
             }
-            None => self.new_sticky_uri(id),
         }
+
+        self.new_sticky_uri(id).await
     }
 
     fn existing_sticky_uri(upstream: &UpstreamInner) -> Option<(OwnedSemaphorePermit, String)> {
@@ -236,21 +262,25 @@ impl Pool {
         }
     }
 
-    fn new_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
-        for upstream in self.pool.iter().filter(Self::sticky_filter()) {
-            return match upstream.permits.clone().try_acquire_owned() {
-                Ok(permit) => {
+    async fn new_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
+        for upstream in self.pool.iter().filter(Self::acquire_filter()) {
+            if let Ok(permit) = upstream.permits.clone().try_acquire_owned() {
+                if let Ok(()) = upstream.try_add_sticky(id).await {
                     info!("Add sticky UUID: {}", id);
-                    upstream.sticky.insert(id.clone(), Instant::now());
-                    Some((permit, upstream.uri.clone()))
+                    return Some((permit, upstream.uri.clone()));
                 }
-                Err(error) => {
-                    info!("Failed to add sticky UUID \"{}\": {}", id, error);
-                    None
-                }
-            };
+            }
         }
+        info!("Unable to locate to sticky UUID slot: {}", id);
         None
+    }
+
+    /// Remove all sticky sessions that have retired
+    async fn expire_sticky(&self, expiry: Duration) {
+        let now = Instant::now();
+        for u in self.pool.iter() {
+            u.expire_sticky(now, expiry).await;
+        }
     }
 
     /// vector of all current IDs and URIs in the pool
