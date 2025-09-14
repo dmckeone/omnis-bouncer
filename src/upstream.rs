@@ -1,29 +1,67 @@
+use dashmap::DashMap;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
+use tracing::{error, info};
+use uuid::Uuid;
 
 /// Upstream specification
 #[derive(Clone)]
 pub struct Upstream {
     pub uri: String,
+    pub connections: usize,
     pub clients: usize,
 }
 
-impl Upstream {
-    pub fn new(uri: impl Into<String>, clients: Option<usize>) -> Self {
+// Guard that contains the locked URI that can be used for a single reverse proxy call,
+// when the guard is dropped, the permit for that URI is dropped along with it.
+pub struct UriGuard<'a> {
+    pub uri: String,
+    permit: OwnedSemaphorePermit,
+    upstream_pool: &'a UpstreamPool,
+}
+
+impl<'a> UriGuard<'a> {
+    fn new(
+        uri: impl Into<String>,
+        permit: OwnedSemaphorePermit,
+        upstream_pool: &'a UpstreamPool,
+    ) -> Self {
         Self {
             uri: uri.into(),
-            clients: clients.unwrap_or(1),
+            permit,
+            upstream_pool,
+        }
+    }
+}
+
+// Create guard that alerts the pool when a URI is freed
+impl<'a> Drop for UriGuard<'a> {
+    fn drop(&mut self) {
+        self.upstream_pool.notify_free_uri(self.uri.clone());
+    }
+}
+
+impl Upstream {
+    pub fn new(uri: impl Into<String>, connections: usize, clients: usize) -> Self {
+        Self {
+            uri: uri.into(),
+            connections,
+            clients,
         }
     }
 }
 
 /// Single backend server
+#[derive(Clone)]
 struct UpstreamInner {
     id: usize,
-    max_clients: usize,
-    sempahore: Arc<Semaphore>,
+    max_connections: usize,
+    permits: Arc<Semaphore>,
+    max_sticky: usize,
+    sticky: DashMap<Uuid, Instant>,
     uri: String,
     removed: bool,
 }
@@ -32,19 +70,29 @@ impl UpstreamInner {
     fn new(id: usize, upstream: Upstream) -> Self {
         Self {
             id,
-            max_clients: upstream.clients,
-            sempahore: Arc::new(Semaphore::new(upstream.clients)),
+            max_connections: upstream.connections,
+            permits: Arc::new(Semaphore::new(upstream.connections)),
+            max_sticky: upstream.clients,
+            sticky: DashMap::with_capacity(upstream.clients),
             uri: upstream.uri,
             removed: false,
         }
     }
 
-    fn current_clients(&self) -> usize {
-        self.max_clients - self.sempahore.available_permits()
+    fn current_sticky(&self) -> usize {
+        self.sticky.len()
+    }
+
+    fn full_sticky(&self) -> bool {
+        self.sticky.len() >= self.max_sticky
+    }
+
+    fn current_connections(&self) -> usize {
+        self.max_connections - self.permits.available_permits()
     }
 
     fn full(&self) -> bool {
-        self.sempahore.available_permits() == 0
+        self.permits.available_permits() == 0
     }
 }
 
@@ -67,17 +115,45 @@ impl UpstreamPool {
     }
 
     /// Return the next available URI in the pool, along with the permit to use it
-    pub async fn least_busy_uri(&self) -> Option<String> {
-        let guard = self._read_lock().await;
-        let upstreams = guard.deref();
-        upstreams.least_busy_uri()
+    pub async fn acquire_uri(&self) -> Option<UriGuard<'_>> {
+        // Acquire the URI, holding the read lock for as little as possible
+        let result = {
+            let guard = self._read_lock().await;
+            let upstreams = guard.deref();
+            upstreams.acquire_uri().await
+        };
+
+        // Transform into URIGuard for consumption, or None if no permits were available
+        match result {
+            Some((permit, uri)) => {
+                let guard = UriGuard::new(uri, permit, self);
+                Some(guard)
+            }
+            None => None,
+        }
     }
 
-    /// Return the next available URI in the pool, along with the permit to use it
-    pub async fn acquire_next_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
-        let guard = self._read_lock().await;
-        let upstreams = guard.deref();
-        upstreams.acquire_next_uri()
+    /// Return the next available sticky URI in the pool, along with the permit to use it
+    pub async fn acquire_sticky_uri(&self, id: &Uuid) -> Option<UriGuard<'_>> {
+        // Acquire the URI, holding the read lock for as little as possible
+        let result = {
+            let guard = self._read_lock().await;
+            let upstreams = guard.deref();
+            upstreams.acquire_sticky_uri(id).await
+        };
+
+        // Transform into URIGuard for consumption, or None if no permits were available
+        match result {
+            Some((permit, uri)) => {
+                let guard = UriGuard::new(uri, permit, self);
+                Some(guard)
+            }
+            None => None,
+        }
+    }
+
+    fn notify_free_uri(&self, uri: String) {
+        // TODO: Perhaps do something with dropped URIs
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
@@ -122,32 +198,58 @@ impl Pool {
         }
     }
 
-    // Get the URI with least busy sempahore (useful for asset loading where the lock is less critical)
-    fn least_busy_uri(&self) -> Option<String> {
-        let mut upstreams: Vec<_> = self.pool.iter().filter(|u| !u.removed).collect();
-        if upstreams.len() == 0 {
-            return None;
+    fn non_sticky_filter() -> fn(&&UpstreamInner) -> bool {
+        |u| !u.removed && !u.full()
+    }
+
+    fn sticky_filter() -> fn(&&UpstreamInner) -> bool {
+        |u| !u.removed && !u.full() && !u.full_sticky()
+    }
+
+    async fn acquire_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
+        for upstream in self.pool.iter().filter(Self::non_sticky_filter()) {
+            if let Ok(permit) = upstream.permits.clone().try_acquire_owned() {
+                return Some((permit, upstream.uri.clone()));
+            }
         }
+        None
+    }
 
-        // Sort for least busy upstream server
-        upstreams.sort_by_cached_key(|u| u.current_clients());
-
-        match upstreams.first() {
-            Some(u) => Some(u.uri.clone()),
-            None => None,
+    async fn acquire_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
+        match self.pool.iter().find(|u| u.sticky.contains_key(id)) {
+            Some(upstream) => {
+                info!("Re-use sticky UUID: {}", id);
+                Self::existing_sticky_uri(upstream)
+            }
+            None => self.new_sticky_uri(id),
         }
     }
 
-    /// Locked URI
-    fn acquire_next_uri(&self) -> Option<(OwnedSemaphorePermit, String)> {
-        let upstreams = self.pool.iter().filter(|u| !u.removed && !u.full());
-        for upstream in upstreams {
-            let permit = upstream.sempahore.clone().try_acquire_owned();
-            if permit.is_ok() {
-                return Some((permit.unwrap(), upstream.uri.clone()));
+    fn existing_sticky_uri(upstream: &UpstreamInner) -> Option<(OwnedSemaphorePermit, String)> {
+        // ID already exists in a given upstream, just return the URI if it's not full
+        match upstream.permits.clone().try_acquire_owned() {
+            Ok(permit) => Some((permit, upstream.uri.clone())),
+            Err(error) => {
+                error!("Failed to acquire sticky permit: {}", error);
+                None
             }
         }
+    }
 
+    fn new_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
+        for upstream in self.pool.iter().filter(Self::sticky_filter()) {
+            return match upstream.permits.clone().try_acquire_owned() {
+                Ok(permit) => {
+                    info!("Add sticky UUID: {}", id);
+                    upstream.sticky.insert(id.clone(), Instant::now());
+                    Some((permit, upstream.uri.clone()))
+                }
+                Err(error) => {
+                    info!("Failed to add sticky UUID \"{}\": {}", id, error);
+                    None
+                }
+            };
+        }
         None
     }
 

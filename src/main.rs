@@ -42,9 +42,9 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
         state
             .upstream_pool
             .add_upstreams(&[
-                Upstream::new(String::from("http://127.0.0.1:63111"), Some(5)),
-                Upstream::new(String::from("http://127.0.0.1:63112"), Some(3)),
-                Upstream::new(String::from("http://127.0.0.1:63113"), Some(1)),
+                Upstream::new(String::from("http://127.0.0.1:63111"), 100, 1),
+                Upstream::new(String::from("http://127.0.0.1:63112"), 100, 1),
+                Upstream::new(String::from("http://127.0.0.1:63113"), 100, 1),
             ])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
@@ -69,7 +69,8 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
             .upstream_pool
             .add_upstreams(&[Upstream::new(
                 String::from("http://127.0.0.1:63111"),
-                Some(10),
+                100,
+                1,
             )])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
@@ -100,6 +101,7 @@ async fn main() {
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
+        sticky_session_timeout: Duration::from_secs(60 * 10),
         asset_cache_secs: Duration::from_secs(60),
         http_port: 3000,
         https_port: 3001,

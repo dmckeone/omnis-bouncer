@@ -10,6 +10,7 @@ pub struct Config {
     pub cookie_name: String,
     pub header_name: String,
     pub connect_timeout: Duration,
+    pub sticky_session_timeout: Duration,
     pub asset_cache_secs: Duration,
     pub http_port: u16,
     pub https_port: u16,

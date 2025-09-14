@@ -26,6 +26,8 @@ tower-serve-static = { version = "0.1", features = ["metadata"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 uuid = { version = "1.18", features = ["fast-rng", "v4"] }
+dashmap = "6.1.0"
+regex = "1.11.2"
 
 [dev-dependencies]
 tracing-test = "0.2"
