@@ -1,11 +1,15 @@
 use axum_server::Handle;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::signal;
+use tokio::sync::Notify;
+use tokio::time::sleep;
+use tokio::{select, signal};
+use tracing::info;
 
 use crate::constants::SHUTDOWN_TIMEOUT;
 
 /// Future for monitoring a shutdown signal to gracefully shut down the server
-pub async fn shutdown_signal(handle: Handle) -> anyhow::Result<()> {
+pub async fn shutdown_signal(handle: Handle, notify: Arc<Notify>) -> anyhow::Result<()> {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -23,12 +27,18 @@ pub async fn shutdown_signal(handle: Handle) -> anyhow::Result<()> {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    tokio::select! {
+    // Wait for Ctrl-C or Terminate, whichever comes first
+    select! {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
 
-    tracing::info!("Received termination signal shutting down");
+    info!("Received shutdown signal");
+
+    // Notify any tasks waiting for shutdown
+    notify.notify_waiters();
+
+    // Notify all axum_server instances to begin graceful shutdown
     let shutdown_duration = SHUTDOWN_TIMEOUT;
     handle.graceful_shutdown(Some(shutdown_duration));
 
@@ -37,8 +47,8 @@ pub async fn shutdown_signal(handle: Handle) -> anyhow::Result<()> {
     while handle.connection_count() > 0
         || SystemTime::now().duration_since(start)? > shutdown_duration
     {
-        tracing::info!("Alive connections: {}", handle.connection_count());
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        info!("Alive connections: {}", handle.connection_count());
+        sleep(Duration::from_secs(1)).await;
     }
 
     Ok(())

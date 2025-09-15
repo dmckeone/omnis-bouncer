@@ -1,3 +1,4 @@
+mod background;
 mod constants;
 mod control;
 mod database;
@@ -9,6 +10,15 @@ mod signals;
 mod state;
 mod upstream;
 
+use crate::background::background_task_loop;
+use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
+use crate::database::create_redis_pool;
+use crate::queue::{QueueControl, StoreCapacity};
+use crate::reverse_proxy::reverse_proxy_handler;
+use crate::servers::{redirect_http_to_https, secure_server};
+use crate::signals::shutdown_signal;
+use crate::state::{AppState, Config};
+use crate::upstream::{Upstream, UpstreamPool};
 use axum::routing::get;
 use axum::Router;
 use axum_extra::extract::cookie::Key as PrivateCookieKey;
@@ -18,20 +28,13 @@ use axum_server::Handle;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Client;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::join;
+use tokio::sync::Notify;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info, Level};
-
-use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
-use crate::database::create_redis_pool;
-use crate::queue::{QueueControl, StoreCapacity};
-use crate::reverse_proxy::reverse_proxy_handler;
-use crate::servers::{redirect_http_to_https, secure_server};
-use crate::signals::shutdown_signal;
-use crate::state::{AppState, Config};
-use crate::upstream::{Upstream, UpstreamPool};
 
 // Testing functions for adding dynamic upstream values
 fn test_dynamic_upstreams(state: AppState) {
@@ -102,7 +105,8 @@ async fn main() {
 
     // Create a shutdown handle for graceful shutdown  (must be early in app startup)
     let shutdown_handle = Handle::new();
-    let shutdown_future = shutdown_signal(shutdown_handle.clone());
+    let shutdown_notify = Arc::new(Notify::new());
+    let shutdown_future = shutdown_signal(shutdown_handle.clone(), shutdown_notify.clone());
 
     // Build Config
     let base64_master_key =
@@ -233,6 +237,8 @@ async fn main() {
     let upstream_addr = SocketAddr::from(([0, 0, 0, 0], state.config.https_port));
     let control_addr = SocketAddr::from(([0, 0, 0, 0], state.config.control_port));
 
+    let background_future = background_task_loop(state.clone(), shutdown_notify.clone());
+
     info!(
         "HTTP Server running on http://{}:{}",
         upstream_upgrade_addr.ip(),
@@ -267,7 +273,8 @@ async fn main() {
             upstream_upgrade_addr,
             upstream_addr.port(),
             shutdown_handle.clone(),
-        )
+        ),
+        background_future
     );
 
     // Exit results (ignored)
@@ -282,6 +289,9 @@ async fn main() {
     }
     if exit.3.is_err() {
         error!("Failed to exit redirect server");
+    }
+    if exit.4.is_err() {
+        error!("Failed to exit background task loop");
     }
 
     info!("Shutdown complete");

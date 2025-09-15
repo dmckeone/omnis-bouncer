@@ -18,6 +18,9 @@ pub static SELF_SIGNED_KEY: &[u8] = include_bytes!(concat!(
     "/certs/self_cert/server.key"
 ));
 
+// Background
+pub static BACKGROUND_SLEEP_TIME: Duration = Duration::from_secs(30);
+
 // Web Server
 pub static SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 

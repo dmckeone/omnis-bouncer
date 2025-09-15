@@ -24,6 +24,12 @@ pub struct QueueRotate {
     pub promoted: usize,
 }
 
+impl QueueRotate {
+    pub fn has_changes(&self) -> bool {
+        self.queue_removed > 0 || self.store_removed > 0 || self.promoted > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Position {
     Store,
