@@ -44,10 +44,18 @@ lazy_static! {
             .case_insensitive(true)
             .build()
             .unwrap();
+    static ref JSCLIENT_RE: Regex = RegexBuilder::new(r"^/jschtml")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
 }
 
 fn is_static_asset(path: &str) -> bool {
     FAVICON_RE.is_match(path) || ASSET_RE.is_match(path)
+}
+
+fn is_jsclient(path: &str) -> bool {
+    JSCLIENT_RE.is_match(path)
 }
 
 pub async fn reverse_proxy_handler(
@@ -88,13 +96,21 @@ pub async fn reverse_proxy_handler(
     };
 
     // Determine Proxy URI, depending on resources needed
-    let guard = if method == Method::GET && is_static_asset(path) {
-        state.upstream_pool.acquire_uri().await
+    let connection_permit = if method == Method::GET && is_static_asset(path) {
+        // Static assets get a fast-path, since they will be cached by this server
+        state.upstream_pool.acquire_cache_load_permit().await
+    } else if is_jsclient(path) {
+        // JS Client gets a special path for sticky session handling
+        state
+            .upstream_pool
+            .acquire_sticky_session_permit(&queue_token)
+            .await
     } else {
-        state.upstream_pool.acquire_sticky_uri(&queue_token).await
+        // REST and other requests, can be passed on to any upstream server
+        state.upstream_pool.acquire_connection_permit().await
     };
 
-    let upstream_uri = match guard {
+    let upstream_uri = match connection_permit {
         Some(guard) => format!("{}{:?}", guard.uri, path_and_query),
         None => {
             // TODO: Waiting room if main JS Client entry point
