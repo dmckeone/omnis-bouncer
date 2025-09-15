@@ -14,6 +14,16 @@ pub struct Upstream {
     pub clients: usize,
 }
 
+impl Upstream {
+    pub fn new(uri: impl Into<String>, connections: usize, clients: usize) -> Self {
+        Self {
+            uri: uri.into(),
+            connections,
+            clients,
+        }
+    }
+}
+
 /// Guard that contains the locked URI that can be used for a single reverse proxy call,
 /// when the guard is dropped, the permit for that URI is dropped along with it.
 pub struct ConnectionPermit<'a> {
@@ -40,16 +50,6 @@ impl<'a> ConnectionPermit<'a> {
 impl<'a> Drop for ConnectionPermit<'a> {
     fn drop(&mut self) {
         self.upstream_pool.notify_free_uri(self.uri.clone());
-    }
-}
-
-impl Upstream {
-    pub fn new(uri: impl Into<String>, connections: usize, clients: usize) -> Self {
-        Self {
-            uri: uri.into(),
-            connections,
-            clients,
-        }
     }
 }
 

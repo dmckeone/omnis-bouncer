@@ -1,5 +1,6 @@
 use deadpool_redis::{redis, Connection};
 use redis::{pipe, AsyncTypedCommands, Script};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::constants::REDIS_FUNCTIONS_DIR;
@@ -96,9 +97,9 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
-        time: usize,
-        validated_expiry: usize,
-        quarantine_expiry: usize,
+        time: u64,
+        validated_expiry: Duration,
+        quarantine_expiry: Duration,
     ) -> Result<usize> {
         let prefix = prefix.into();
         let position = self
@@ -106,8 +107,8 @@ impl Scripts {
             .arg(&prefix)
             .arg(String::from(id))
             .arg(time)
-            .arg(validated_expiry)
-            .arg(quarantine_expiry)
+            .arg(validated_expiry.as_secs())
+            .arg(quarantine_expiry.as_secs())
             .invoke_async(conn)
             .await?;
 
@@ -121,9 +122,9 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
-        time: usize,
-        validated_expiry: usize,
-        quarantine_expiry: usize,
+        time: u64,
+        validated_expiry: Duration,
+        quarantine_expiry: Duration,
     ) -> Result<usize> {
         let prefix = prefix.into();
         let position = self
@@ -131,8 +132,8 @@ impl Scripts {
             .arg(prefix)
             .arg(String::from(id))
             .arg(time)
-            .arg(validated_expiry)
-            .arg(quarantine_expiry)
+            .arg(validated_expiry.as_secs())
+            .arg(quarantine_expiry.as_secs())
             .invoke_async(conn)
             .await?;
 
@@ -145,7 +146,7 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
-        time: usize,
+        time: u64,
     ) -> Result<()> {
         let prefix = prefix.into();
         let _: Option<String> = self
@@ -164,7 +165,7 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
@@ -223,7 +224,7 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 

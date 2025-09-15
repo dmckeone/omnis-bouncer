@@ -1,23 +1,33 @@
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
-    QueueEnabled, QueueRotate, QueueSettings, QueueStatus, QueueSyncTimestamp, StoreCapacity,
+    Position, QueueEnabled, QueueRotate, QueueSettings, QueueStatus, QueueSyncTimestamp,
+    StoreCapacity,
 };
 use crate::queue::scripts::Scripts;
 
 pub struct QueueControl {
     pool: RedisPool,
+    quarantine_expiry: Duration,
+    validated_expiry: Duration,
     scripts: Scripts,
 }
 
 impl QueueControl {
-    pub fn new(pool: RedisPool) -> Result<Self> {
+    pub fn new(
+        pool: RedisPool,
+        quarantine_expiry: Duration,
+        validated_expiry: Duration,
+    ) -> Result<Self> {
         let queue = Self {
             pool,
+            quarantine_expiry,
+            validated_expiry,
             scripts: Scripts::new()?,
         };
 
@@ -245,9 +255,7 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: Option<usize>,
-        validated_expiry: usize,
-        quarantine_expiry: usize,
+        time: Option<u64>,
     ) -> Result<usize> {
         let mut conn = self.conn().await?;
 
@@ -262,8 +270,8 @@ impl QueueControl {
                 prefix,
                 id,
                 time,
-                validated_expiry,
-                quarantine_expiry,
+                self.validated_expiry,
+                self.quarantine_expiry,
             )
             .await
     }
@@ -274,10 +282,8 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: Option<usize>,
-        validated_expiry: usize,
-        quarantine_expiry: usize,
-    ) -> Result<usize> {
+        time: Option<u64>,
+    ) -> Result<Position> {
         let mut conn = self.conn().await?;
 
         let time = match time {
@@ -285,16 +291,25 @@ impl QueueControl {
             None => current_time(&mut conn).await?,
         };
 
-        self.scripts
+        let result = self
+            .scripts
             .id_position(
                 &mut conn,
                 prefix,
                 id,
                 time,
-                validated_expiry,
-                quarantine_expiry,
+                self.validated_expiry,
+                self.quarantine_expiry,
             )
-            .await
+            .await;
+
+        match result {
+            Ok(pos) => Ok(match pos {
+                0 => Position::Store,
+                1.. => Position::Queue(pos),
+            }),
+            Err(e) => Err(e),
+        }
     }
 
     /// Remove a given UUID from the queue/store
@@ -302,7 +317,7 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Result<()> {
         let mut conn = self.conn().await?;
 
@@ -318,7 +333,7 @@ impl QueueControl {
     pub async fn rotate_full(
         &self,
         prefix: impl Into<String>,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
         self.scripts.rotate_full(&mut conn, prefix, time).await
@@ -328,7 +343,7 @@ impl QueueControl {
     pub async fn rotate_expire(
         &self,
         prefix: impl Into<String>,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
         self.scripts.rotate_expire(&mut conn, prefix, time).await
@@ -342,12 +357,12 @@ mod test {
     use redis::AsyncTypedCommands;
     use tracing_test::traced_test;
 
-    static QUARANTINE: usize = 45;
-    static VALIDATED: usize = 600;
+    static QUARANTINE: Duration = Duration::from_secs(45);
+    static VALIDATED: Duration = Duration::from_secs(600);
 
     fn test_queue() -> QueueControl {
         let pool = create_test_pool().expect("Failed to create test pool");
-        QueueControl::new(pool).expect("Failed to create test QueueControl")
+        QueueControl::new(pool, QUARANTINE, VALIDATED).expect("Failed to create test QueueControl")
     }
 
     fn generate_ids(queue: &QueueControl, count: usize) -> Vec<String> {
@@ -381,7 +396,7 @@ mod test {
         queue: &QueueControl,
         prefix: impl Into<String>,
         count: usize,
-        time: Option<usize>,
+        time: Option<u64>,
     ) -> Vec<Uuid> {
         let prefix = prefix.into();
 
@@ -390,10 +405,7 @@ mod test {
             let id = queue.new_id();
 
             queue
-                .id_add(
-                    &prefix, id, time, VALIDATED,  // seconds
-                    QUARANTINE, // seconds
-                )
+                .id_add(&prefix, id, time)
                 .await
                 .expect("Failed to add new ID to queue");
 
@@ -476,7 +488,7 @@ mod test {
             return;
         };
 
-        QueueControl::new(pool).expect("QueueControl::new() failed");
+        QueueControl::new(pool, QUARANTINE, VALIDATED).expect("QueueControl::new() failed");
     }
 
     #[tokio::test]
@@ -891,8 +903,6 @@ mod test {
                 prefix,
                 id,
                 Some(1757510637), // unix time
-                VALIDATED,        // seconds
-                QUARANTINE,       // seconds
             )
             .await
             .expect("Failed to add new ID to store");
@@ -912,8 +922,6 @@ mod test {
                 prefix,
                 id,
                 Some(1757510637), // unix time
-                VALIDATED,        // seconds
-                QUARANTINE,       // seconds
             )
             .await
             .expect("Failed to add new ID to queue");
@@ -948,19 +956,19 @@ mod test {
 
         // Check that the first ID is in the store
         let position = queue
-            .id_position(prefix, *first_id, None, VALIDATED, QUARANTINE)
+            .id_position(prefix, *first_id, None)
             .await
             .expect("Failed to get first position");
 
-        assert_eq!(position, 0);
+        assert_eq!(position, Position::Store);
 
         // Check that the last ID is at the back of the line (queue positions are indexed from 1)
         let position = queue
-            .id_position(prefix, *last_id, None, VALIDATED, QUARANTINE)
+            .id_position(prefix, *last_id, None)
             .await
             .expect("Failed to get last position");
 
-        assert_eq!(position, count - 1);
+        assert_eq!(position, Position::Queue(count - 1));
     }
 
     #[tokio::test]
@@ -1034,7 +1042,7 @@ mod test {
             .await
             .expect("Failed to fetch queue expiry value");
 
-        let expiry_time = result.unwrap().parse::<usize>().unwrap();
+        let expiry_time = result.unwrap().parse::<u64>().unwrap();
 
         // Verify that the "removal" correctly set the time back by 1 second
         assert_eq!(expiry_time, time - 1);
@@ -1055,7 +1063,7 @@ mod test {
             .expect("Failed to set queue status");
 
         let insert_time = 1757610168;
-        let rotate_time = insert_time + VALIDATED + 1;
+        let rotate_time = insert_time + VALIDATED.as_secs() + 1;
 
         let count = 5;
         let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
@@ -1088,8 +1096,8 @@ mod test {
 
         // Setup timeouts and counts
         let insert_time_a = 1757613534;
-        let insert_time_b = insert_time_a + (VALIDATED * 2);
-        let rotate_time = insert_time_a + VALIDATED + 1;
+        let insert_time_b = insert_time_a + (VALIDATED.as_secs() * 2);
+        let rotate_time = insert_time_a + VALIDATED.as_secs() + 1;
 
         let initial_store_count = 3;
         let followup_queue_count = 5;
@@ -1137,7 +1145,7 @@ mod test {
             .expect("Failed to set queue status");
 
         let insert_time = 1757610168;
-        let rotate_time = insert_time + VALIDATED + 1;
+        let rotate_time = insert_time + VALIDATED.as_secs() + 1;
 
         let count = 5;
         let _ = add_many(&queue, prefix, count, Some(insert_time)).await;

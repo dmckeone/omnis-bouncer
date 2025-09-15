@@ -1,12 +1,14 @@
 use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QueueSettings {
     pub enabled: bool,
     pub capacity: StoreCapacity,
     pub sync_timestamp: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QueueStatus {
     pub enabled: bool,
     pub capacity: StoreCapacity,
@@ -15,13 +17,20 @@ pub struct QueueStatus {
     pub sync_timestamp: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QueueRotate {
     pub queue_removed: usize,
     pub store_removed: usize,
     pub promoted: usize,
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Position {
+    Store,
+    Queue(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum StoreCapacity {
     Sized(usize),
     Unlimited,

@@ -14,8 +14,8 @@ pub async fn get_connection(pool: &Pool) -> Result<Connection> {
 }
 
 // Get current time from server
-pub async fn current_time(conn: &mut Connection) -> Result<usize> {
-    let result: (Option<usize>, Option<usize>) = cmd("TIME").query_async(conn).await?;
+pub async fn current_time(conn: &mut Connection) -> Result<u64> {
+    let result: (Option<u64>, Option<u64>) = cmd("TIME").query_async(conn).await?;
     match result.0 {
         Some(t) => Ok(t),
         None => Err(Error::RedisTimeIsNil),

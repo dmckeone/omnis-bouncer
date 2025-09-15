@@ -10,12 +10,21 @@ use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
+use tower_cookies::cookie::time::OffsetDateTime;
+use tower_cookies::cookie::{Expiration, SameSite};
 use tower_cookies::{Cookie, Cookies};
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
+use crate::constants::{
+    WAITING_ROOM_POSITION_COOKIE, WAITING_ROOM_POSITION_HEADER, WAITING_ROOM_SIZE_COOKIE,
+    WAITING_ROOM_SIZE_HEADER,
+};
 use crate::errors::Result;
+use crate::queue::{Position, QueueControl};
 use crate::state::AppState;
+use crate::upstream::{ConnectionPermit, UpstreamPool};
 
 lazy_static! {
     static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
@@ -48,14 +57,10 @@ lazy_static! {
         .case_insensitive(true)
         .build()
         .unwrap();
-}
-
-fn is_static_asset(path: &str) -> bool {
-    FAVICON_RE.is_match(path) || ASSET_RE.is_match(path)
-}
-
-fn is_jsclient(path: &str) -> bool {
-    JSCLIENT_RE.is_match(path)
+    static ref HTML_RE: Regex = RegexBuilder::new(r"\.(htm|html)$")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
 }
 
 pub async fn reverse_proxy_handler(
@@ -76,45 +81,59 @@ pub async fn reverse_proxy_handler(
     let path = path_and_query.path();
     let body_stream = request.into_body().into_data_stream();
 
-    // Extract cookies from the request
+    // Extract and determine queue ID
+    let queue = &state.queue;
     let cookie = cookies.get(&cookie_name);
 
-    // Extract queue token from cookie
-    let queue_token = match cookie.clone() {
-        Some(c) => match Uuid::parse_str(c.value()) {
-            Ok(u) => u,
-            Err(e) => {
-                error!(
-                    "Using new ID after cookie parse failure - \"{}\": {}",
-                    c.value(),
-                    e
-                );
-                state.queue.new_id()
-            }
-        },
-        None => state.queue.new_id(),
-    };
+    let queue_id = extract_queue_id(queue, &cookie, &headers, &config.header_name);
 
-    // Determine Proxy URI, depending on resources needed
-    let connection_permit = if method == Method::GET && is_static_asset(path) {
-        // Static assets get a fast-path, since they will be cached by this server
-        state.upstream_pool.acquire_cache_load_permit().await
-    } else if is_jsclient(path) {
-        // JS Client gets a special path for sticky session handling
-        state
-            .upstream_pool
-            .acquire_sticky_session_permit(&queue_token)
-            .await
-    } else {
-        // REST and other requests, can be passed on to any upstream server
-        state.upstream_pool.acquire_connection_permit().await
-    };
+    // TODO: Check waiting room before attempting to touch any upstream servers
+    if method == Method::GET && is_html_page(path) {
+        let queue_prefix = config.queue_prefix.clone();
+        let position = queue
+            .id_position(queue_prefix.clone(), queue_id, None)
+            .await?;
+
+        if let Position::Queue(p) = position {
+            // Determine general queue status
+            let status = queue.queue_status(queue_prefix.clone()).await?;
+            let position_string = p.to_string();
+            let size_string = status.queue_size.to_string();
+
+            // Fetch waiting page
+            let waiting_page = queue
+                .waiting_page(queue_prefix.clone())
+                .await?
+                .unwrap_or(format!(
+                    "Waiting Page - {} of {}",
+                    position_string, size_string
+                ));
+
+            let mut waiting_headers = HeaderMap::new();
+            waiting_headers.insert(WAITING_ROOM_POSITION_HEADER, position_string.parse()?);
+            waiting_headers.insert(WAITING_ROOM_SIZE_HEADER, size_string.parse()?);
+
+            cookies.add(make_browser_cookie(
+                WAITING_ROOM_POSITION_COOKIE,
+                position_string,
+            ));
+            cookies.add(make_browser_cookie(WAITING_ROOM_SIZE_COOKIE, size_string));
+
+            return Ok((
+                StatusCode::OK,
+                waiting_headers,
+                axum::body::Body::from(waiting_page),
+            ));
+        }
+    }
+
+    // Get connection permit for communicating with an upstream server
+    let connection_permit =
+        get_connection(&state.upstream_pool, method.clone(), path, &queue_id).await;
 
     let upstream_uri = match connection_permit {
         Some(guard) => format!("{}{:?}", guard.uri, path_and_query),
         None => {
-            // TODO: Waiting room if main JS Client entry point
-            error!("No upstream available");
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
                 HeaderMap::new(),
@@ -134,9 +153,11 @@ pub async fn reverse_proxy_handler(
 
     // Attach return cookie
     if cookie.is_none() {
-        let mut cookie = Cookie::new(cookie_name, String::from(queue_token));
-        cookie.set_http_only(true);
-        cookie.set_path("/");
+        let cookie = make_server_cookie(
+            cookie_name,
+            String::from(queue_id),
+            Some(config.cookie_id_expiration), // 1 day ID expiration
+        );
         cookies.add(cookie);
     }
 
@@ -165,7 +186,7 @@ pub async fn reverse_proxy_handler(
     let header_name = config.header_name.clone();
     response_headers.insert(
         HeaderName::from_lowercase(header_name.as_bytes())?,
-        String::from(queue_token).parse()?,
+        String::from(queue_id).parse()?,
     );
 
     // Copy all response headers except the ones in the ignore list
@@ -173,4 +194,125 @@ pub async fn reverse_proxy_handler(
     let response_body = axum::body::Body::from_stream(response.bytes_stream());
 
     Ok((response_status, response_headers, response_body))
+}
+
+// Create a cookie for returning to the caller in a way that can be consumed by Javascript in the
+// browser
+fn make_browser_cookie<'a>(name: impl Into<String>, value: impl Into<String>) -> Cookie<'a> {
+    let name = name.into();
+    let value = value.into();
+
+    let mut cookie = Cookie::new(name, value);
+    cookie.set_same_site(SameSite::Strict);
+    cookie.set_secure(true);
+    cookie.set_path("/");
+    cookie
+}
+
+// Create a cookie that is only accessible by the server, and not consumable by the Javascript
+fn make_server_cookie<'a>(
+    name: impl Into<String>,
+    value: impl Into<String>,
+    expiry: Option<Duration>,
+) -> Cookie<'a> {
+    let name = name.into();
+    let value = value.into();
+
+    let mut cookie = Cookie::new(name, value);
+    cookie.set_same_site(SameSite::Strict);
+    cookie.set_http_only(true);
+    cookie.set_secure(true);
+    cookie.set_path("/");
+    if let Some(expiry) = expiry {
+        cookie.set_expires(Expiration::from(OffsetDateTime::now_utc() + expiry));
+    }
+    cookie
+}
+
+/// Extract a queue token from a cookie
+fn extract_queue_id(
+    queue: &QueueControl,
+    cookie: &Option<Cookie>,
+    headers: &HeaderMap,
+    header_key: &String,
+) -> Uuid {
+    // Extract ID from cookie
+    let cookie_id = match cookie {
+        Some(c) => match Uuid::parse_str(c.value()) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                error!(
+                    "Failed to parse Queue ID cookie as UUID \"{}\": {}",
+                    c.value(),
+                    e
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    // Extract ID from header
+    let header_id = match headers.get(header_key) {
+        Some(h) => match h.to_str() {
+            Ok(s) => match Uuid::parse_str(s) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    error!(
+                        "Failed to parse Queue ID header \"{}\" as UUID \"{}\": {}",
+                        header_key, s, e
+                    );
+                    None
+                }
+            },
+            Err(e) => {
+                error!(
+                    "Queue ID header \"{}\" was not a valid string: {}",
+                    header_key, e
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    // Decide on which ID to use, header takes precedence over cookie, and if both are
+    // missing, create a new one
+    match (cookie_id, header_id) {
+        (Some(_), Some(header_id)) => header_id,
+        (Some(cookie_id), None) => cookie_id,
+        (None, Some(header_id)) => header_id,
+        (None, None) => queue.new_id(),
+    }
+}
+
+fn is_html_page(path: &str) -> bool {
+    HTML_RE.is_match(path)
+}
+
+fn is_static_asset(path: &str) -> bool {
+    FAVICON_RE.is_match(path) || ASSET_RE.is_match(path)
+}
+
+fn is_jsclient(path: &str) -> bool {
+    JSCLIENT_RE.is_match(path)
+}
+
+// Get a connection permit for the request, based on the method and path.
+async fn get_connection<'a>(
+    pool: &'a UpstreamPool,
+    method: Method,
+    path: &str,
+    queue_token: &Uuid,
+) -> Option<ConnectionPermit<'a>> {
+    if method == Method::GET && is_static_asset(path) {
+        // Static assets get a fast-path, since they will be cached by this server
+        pool.acquire_cache_load_permit().await
+    } else if is_jsclient(path) {
+        // JS Client gets a special path for sticky session handling
+        pool.acquire_sticky_session_permit(queue_token).await
+    } else {
+        // REST and other requests, can be passed on to any upstream server
+        pool.acquire_connection_permit().await
+    }
 }

@@ -25,7 +25,7 @@ use tracing::{error, info, Level};
 
 use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
 use crate::database::create_redis_pool;
-use crate::queue::QueueControl;
+use crate::queue::{QueueControl, StoreCapacity};
 use crate::reverse_proxy::reverse_proxy_handler;
 use crate::servers::{redirect_http_to_https, secure_server};
 use crate::signals::shutdown_signal;
@@ -101,11 +101,17 @@ async fn main() {
         cookie_name: String::from("omnis_bouncer"),
         header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
-        sticky_session_timeout: Duration::from_secs(60 * 10),
+        cookie_id_expiration: Duration::from_secs(60 * 60 * 24), // 1 day
+        sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
         asset_cache_secs: Duration::from_secs(60),
         http_port: 3000,
         https_port: 3001,
         control_port: 2999,
+        queue_enabled: true,
+        store_capacity: StoreCapacity::Sized(1),
+        queue_prefix: String::from("omnis_bouncer"),
+        quarantine_expiry: Duration::from_secs(45),
+        validated_expiry: Duration::from_secs(600),
     };
 
     // Create Redis Pool
@@ -118,7 +124,7 @@ async fn main() {
     };
 
     // Create queue control and initialize functions
-    let queue = match QueueControl::new(redis) {
+    let queue = match QueueControl::new(redis, config.quarantine_expiry, config.validated_expiry) {
         Ok(q) => q,
         Err(e) => {
             error!("Failed to initialize queue: {:?}", e);
@@ -127,6 +133,18 @@ async fn main() {
     };
 
     if let Err(e) = queue.init().await {
+        error!("Failed to initialize queue functions: {:?}", e);
+        return;
+    };
+
+    if let Err(e) = queue
+        .set_queue_settings(
+            config.queue_prefix.clone(),
+            config.queue_enabled,
+            config.store_capacity,
+        )
+        .await
+    {
         error!("Failed to initialize queue functions: {:?}", e);
         return;
     };
