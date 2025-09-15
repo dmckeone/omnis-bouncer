@@ -157,22 +157,28 @@ async fn main() {
         }
     };
 
+    // Initialize queue functions
     if let Err(e) = queue.init().await {
         error!("Failed to initialize queue functions: {:?}", e);
         return;
     };
 
-    if let Err(e) = queue
-        .set_queue_settings(
-            config.queue_prefix.clone(),
-            config.queue_enabled,
-            config.store_capacity,
-        )
-        .await
-    {
-        error!("Failed to initialize queue functions: {:?}", e);
-        return;
-    };
+    // Initialize basic prefix keys, if not yet setup
+    if let Ok(has_keys) = queue.check_sync_keys(config.queue_prefix.clone()).await {
+        if !has_keys {
+            if let Err(e) = queue
+                .set_queue_settings(
+                    config.queue_prefix.clone(),
+                    config.queue_enabled,
+                    config.store_capacity,
+                )
+                .await
+            {
+                error!("Failed to initialize queue functions: {:?}", e);
+                return;
+            };
+        }
+    }
 
     // Create a new http client pool
     let client = Client::builder()
