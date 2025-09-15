@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.8", features = ["http2", "multipart"] }
-axum-extra = "0.10"
+axum-extra = { version = "0.10", features = ["cookie", "cookie-key-expansion", "cookie-private", "cookie-signed"] }
 axum-response-cache = "0.4"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
@@ -28,6 +28,7 @@ tracing = "0.1"
 uuid = { version = "1.18", features = ["fast-rng", "v4"] }
 dashmap = "6.1.0"
 regex = "1.11.2"
+base64 = "0.22.1"
 
 [dev-dependencies]
 tracing-test = "0.2"

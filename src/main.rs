@@ -11,12 +11,13 @@ mod upstream;
 
 use axum::routing::get;
 use axum::Router;
+use axum_extra::extract::cookie::Key as PrivateCookieKey;
 use axum_response_cache::CacheLayer;
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::Client;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::join;
 use tower_cookies::CookieManagerLayer;
@@ -33,7 +34,7 @@ use crate::state::{AppState, Config};
 use crate::upstream::{Upstream, UpstreamPool};
 
 // Testing functions for adding dynamic upstream values
-fn test_dynamic_upstreams(state: Arc<AppState>) {
+fn test_dynamic_upstreams(state: AppState) {
     tokio::task::spawn(async move {
         // Wait 1 second to simulate a user change
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -77,6 +78,14 @@ fn test_dynamic_upstreams(state: Arc<AppState>) {
     });
 }
 
+fn decode_key(master_key: impl Into<String>) -> anyhow::Result<PrivateCookieKey> {
+    let master_key = master_key.into();
+    match STANDARD.decode(master_key) {
+        Ok(k) => Ok(PrivateCookieKey::derive_from(k.as_slice())),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing
@@ -96,10 +105,26 @@ async fn main() {
     let shutdown_future = shutdown_signal(shutdown_handle.clone());
 
     // Build Config
+    let base64_master_key =
+        "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ==";
+
+    let cookie_secret_key = match decode_key(base64_master_key) {
+        Ok(k) => k,
+        Err(error) => {
+            error!("Failed to decode cookie master key: {}", error);
+            return;
+        }
+    };
+
     let config = Config {
         app_name: String::from("Omnis Bouncer"),
-        cookie_name: String::from("omnis_bouncer"),
-        header_name: String::from("x-omnis-bouncer").to_lowercase(), // Must be lowercase
+        cookie_secret_key,
+        id_cookie_name: String::from("omnis-bouncer-id"),
+        position_cookie_name: String::from("omnis-bouncer-queue-position"),
+        queue_size_cookie_name: String::from("omnis-bouncer-queue-size"),
+        id_http_header: String::from("x-omnis-bouncer-id").to_lowercase(), // Must be lowercase
+        position_http_header: String::from("x-omnis-bouncer-queue-position").to_lowercase(), // Must be lowercase
+        queue_size_http_header: String::from("x-omnis-bouncer-queue-size").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
         cookie_id_expiration: Duration::from_secs(60 * 60 * 24), // 1 day
         sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
@@ -161,12 +186,7 @@ async fn main() {
     let upstream_pool = UpstreamPool::new(config.sticky_session_timeout);
 
     // Create our app state
-    let state = Arc::new(AppState {
-        config,
-        queue,
-        upstream_pool,
-        client,
-    });
+    let state = AppState::new(config, queue, upstream_pool, client);
 
     // Create apps
     let control_app: Router = control::router(state.clone())

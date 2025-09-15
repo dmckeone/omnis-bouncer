@@ -1,5 +1,6 @@
 use axum::extract::{OriginalUri, Request, State};
 use axum::response::IntoResponse;
+use axum_extra::extract::{CookieJar, PrivateCookieJar, SignedCookieJar};
 use http::header::{
     ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
@@ -9,18 +10,13 @@ use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 use tower_cookies::cookie::time::OffsetDateTime;
 use tower_cookies::cookie::{Expiration, SameSite};
-use tower_cookies::{Cookie, Cookies};
+use tower_cookies::Cookie;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-use crate::constants::{
-    WAITING_ROOM_POSITION_COOKIE, WAITING_ROOM_POSITION_HEADER, WAITING_ROOM_SIZE_COOKIE,
-    WAITING_ROOM_SIZE_HEADER,
-};
 use crate::errors::Result;
 use crate::queue::{Position, QueueControl};
 use crate::state::AppState;
@@ -64,9 +60,10 @@ lazy_static! {
 }
 
 pub async fn reverse_proxy_handler(
-    State(state): State<Arc<AppState>>,
+    State(state): State<AppState>,
     method: Method,
-    cookies: Cookies,
+    cookies: CookieJar,
+    private_cookies: PrivateCookieJar,
     headers: HeaderMap,
     uri: OriginalUri,
     request: Request,
@@ -74,20 +71,33 @@ pub async fn reverse_proxy_handler(
     // Extract config
     let state = state.clone();
     let config = &state.config;
-    let cookie_name = config.cookie_name.clone();
 
     // Clone properties of the request that are used
     let path_and_query = uri.path_and_query().unwrap();
     let path = path_and_query.path();
     let body_stream = request.into_body().into_data_stream();
 
-    // Extract and determine queue ID
+    // Prepare cookies for any writes
+    let mut cookies = cookies;
+    let mut private_cookies = private_cookies;
+
+    // Extract cookie values
+    let id_cookie = private_cookies.get(config.id_cookie_name.clone().as_str());
+
+    // Extract Queue ID
     let queue = &state.queue;
-    let cookie = cookies.get(&cookie_name);
+    let queue_id = extract_queue_id(queue, &id_cookie, &headers, &config.id_http_header);
 
-    let queue_id = extract_queue_id(queue, &cookie, &headers, &config.header_name);
+    // Attach cookie queue ID, if it's new
+    if id_cookie.is_none() {
+        private_cookies = private_cookies.add(make_server_cookie(
+            config.id_cookie_name.clone(),
+            String::from(queue_id),
+            Some(config.cookie_id_expiration), // 1 day ID expiration
+        ));
+    }
 
-    // TODO: Check waiting room before attempting to touch any upstream servers
+    // Check if waiting room needs to be displayed
     if method == Method::GET && is_html_page(path) {
         let queue_prefix = config.queue_prefix.clone();
         let position = queue
@@ -109,23 +119,41 @@ pub async fn reverse_proxy_handler(
                     position_string, size_string
                 ));
 
-            let mut waiting_headers = HeaderMap::new();
-            waiting_headers.insert(WAITING_ROOM_POSITION_HEADER, position_string.parse()?);
-            waiting_headers.insert(WAITING_ROOM_SIZE_HEADER, size_string.parse()?);
+            let waiting_headers = {
+                let mut waiting_headers = HeaderMap::new();
+                waiting_headers.insert(
+                    HeaderName::from_lowercase(config.position_http_header.as_bytes())?,
+                    position_string.parse()?,
+                );
+                waiting_headers.insert(
+                    HeaderName::from_lowercase(config.queue_size_http_header.as_bytes())?,
+                    size_string.parse()?,
+                );
+                waiting_headers
+            };
 
-            cookies.add(make_browser_cookie(
-                WAITING_ROOM_POSITION_COOKIE,
+            cookies = cookies.add(make_browser_cookie(
+                config.position_cookie_name.clone(),
                 position_string,
             ));
-            cookies.add(make_browser_cookie(WAITING_ROOM_SIZE_COOKIE, size_string));
+            cookies = cookies.add(make_browser_cookie(
+                config.queue_size_cookie_name.clone(),
+                size_string,
+            ));
 
             return Ok((
                 StatusCode::OK,
+                cookies,
+                private_cookies,
                 waiting_headers,
                 axum::body::Body::from(waiting_page),
             ));
         }
     }
+
+    // // Strip waiting room cookies
+    cookies = cookies.remove(Cookie::from(config.position_cookie_name.clone()));
+    cookies = cookies.remove(Cookie::from(config.queue_size_cookie_name.clone()));
 
     // Get connection permit for communicating with an upstream server
     let connection_permit =
@@ -134,9 +162,17 @@ pub async fn reverse_proxy_handler(
     let upstream_uri = match connection_permit {
         Some(guard) => format!("{}{:?}", guard.uri, path_and_query),
         None => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                HeaderName::from_lowercase(config.id_http_header.as_bytes())?,
+                String::from(queue_id).parse()?,
+            );
+
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
-                HeaderMap::new(),
+                cookies,
+                private_cookies,
+                headers,
                 axum::body::Body::from("Service Unavailable"),
             ));
         }
@@ -150,16 +186,6 @@ pub async fn reverse_proxy_handler(
         .body(reqwest::Body::wrap_stream(body_stream))
         .send()
         .await?;
-
-    // Attach return cookie
-    if cookie.is_none() {
-        let cookie = make_server_cookie(
-            cookie_name,
-            String::from(queue_id),
-            Some(config.cookie_id_expiration), // 1 day ID expiration
-        );
-        cookies.add(cookie);
-    }
 
     // Extract content type -- maybe don't add header for certain types?
     let content_type = match response.headers().get(CONTENT_TYPE) {
@@ -183,9 +209,8 @@ pub async fn reverse_proxy_handler(
         .collect();
 
     // Attach matching header (if REST API)
-    let header_name = config.header_name.clone();
     response_headers.insert(
-        HeaderName::from_lowercase(header_name.as_bytes())?,
+        HeaderName::from_lowercase(config.id_http_header.as_bytes())?,
         String::from(queue_id).parse()?,
     );
 
@@ -193,7 +218,13 @@ pub async fn reverse_proxy_handler(
     let response_status = response.status();
     let response_body = axum::body::Body::from_stream(response.bytes_stream());
 
-    Ok((response_status, response_headers, response_body))
+    Ok((
+        response_status,
+        cookies,
+        private_cookies,
+        response_headers,
+        response_body,
+    ))
 }
 
 // Create a cookie for returning to the caller in a way that can be consumed by Javascript in the
