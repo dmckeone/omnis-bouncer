@@ -339,13 +339,9 @@ impl Pool {
         let upstream = self
             .least_connections()
             .into_iter()
-            .filter(Self::cache_load_filter)
-            .next();
+            .find(Self::cache_load_filter);
 
-        match upstream {
-            Some(u) => Some(u.uri.clone()),
-            None => None,
-        }
+        upstream.map(|u| u.uri.clone())
     }
 
     /// Acquire a connection URI
@@ -392,10 +388,10 @@ impl Pool {
             .filter(Self::acquire_filter);
 
         for upstream in least_sticky {
-            if let Ok(permit) = upstream.connection_permits.clone().try_acquire_owned() {
-                if let Ok(()) = upstream.try_add_sticky(id).await {
-                    return Some((permit, upstream.uri.clone()));
-                }
+            if let Ok(permit) = upstream.connection_permits.clone().try_acquire_owned()
+                && let Ok(()) = upstream.try_add_sticky(id).await
+            {
+                return Some((permit, upstream.uri.clone()));
             }
         }
         info!("Unable to locate to sticky UUID slot: {}", id);

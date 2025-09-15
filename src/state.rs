@@ -62,7 +62,7 @@ impl Deref for AppState {
     type Target = State;
 
     fn deref(&self) -> &Self::Target {
-        &*self.0
+        &self.0
     }
 }
 

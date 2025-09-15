@@ -1,6 +1,6 @@
 use axum::extract::{OriginalUri, Request, State};
 use axum::response::IntoResponse;
-use axum_extra::extract::{CookieJar, PrivateCookieJar, SignedCookieJar};
+use axum_extra::extract::{CookieJar, PrivateCookieJar};
 use http::header::{
     ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
