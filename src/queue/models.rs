@@ -1,14 +1,15 @@
 use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct QueueSettings {
     pub enabled: bool,
     pub capacity: StoreCapacity,
     pub sync_timestamp: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct QueueStatus {
     pub enabled: bool,
     pub capacity: StoreCapacity,
@@ -17,7 +18,7 @@ pub struct QueueStatus {
     pub sync_timestamp: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct QueueRotate {
     pub queue_removed: usize,
     pub store_removed: usize,
@@ -30,16 +31,40 @@ impl QueueRotate {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Position {
     Store,
     Queue(usize),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl Serialize for Position {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Queue(size) => serializer.serialize_u64(*size as u64),
+            Self::Store => serializer.serialize_u64(0),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCapacity {
     Sized(usize),
     Unlimited,
+}
+
+impl Serialize for StoreCapacity {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Sized(size) => serializer.serialize_u64(*size as u64),
+            Self::Unlimited => serializer.serialize_u64(0),
+        }
+    }
 }
 
 impl TryFrom<Option<String>> for StoreCapacity {

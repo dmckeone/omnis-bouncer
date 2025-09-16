@@ -10,19 +10,25 @@ mod signals;
 mod state;
 mod upstream;
 
-use axum::routing::get;
-use axum::Router;
+use axum::error_handling::HandleErrorLayer;
+use axum::routing::{any, get};
+use axum::{BoxError, Router};
 use axum_extra::extract::cookie::Key as PrivateCookieKey;
 use axum_response_cache::CacheLayer;
 use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use http::StatusCode;
 use reqwest::Client;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::join;
 use tokio::sync::Notify;
+use tower::buffer::{Buffer, BufferLayer};
+use tower::limit::RateLimitLayer;
+use tower::load_shed::LoadShedLayer;
+use tower::{ServiceBuilder, ServiceExt};
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info, Level};
@@ -102,6 +108,10 @@ async fn main() {
         cookie_id_expiration: Duration::from_secs(60 * 60 * 24), // 1 day
         sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
         asset_cache_secs: Duration::from_secs(60),
+        buffer_connections: 10000,
+        js_client_rate_limit_per_sec: 100,
+        api_rate_limit_per_sec: 1,
+        ultra_rate_limit_per_sec: 2,
         http_port: 3000,
         https_port: 3001,
         control_port: 2999,
@@ -167,32 +177,8 @@ async fn main() {
     let state = AppState::new(config, queue, upstream_pool, client);
 
     // Create apps
-    let control_app: Router = control::router(state.clone())
-        // .layer(TraceLayer::new_for_http())
-        .layer(CookieManagerLayer::new())
-        .layer(RequestDecompressionLayer::new())
-        .layer(CompressionLayer::new());
-
-    // Cache assets for 60 seconds,  reducing load on backend server
-    let asset_cache =
-        CacheLayer::with_lifespan(state.config.asset_cache_secs).use_stale_on_failure();
-
-    // Upstream routing
-    let upstream_app: Router = Router::new()
-        .route("/favicon.ico", get(reverse_proxy_handler))
-        .route("/jschtml/css/{*key}", get(reverse_proxy_handler))
-        .route("/jschtml/fonts/{*key}", get(reverse_proxy_handler))
-        .route("/jschtml/icons/{*key}", get(reverse_proxy_handler))
-        .route("/jschtml/images/{*key}", get(reverse_proxy_handler))
-        .route("/jschtml/scripts/{*key}", get(reverse_proxy_handler))
-        .route("/jschtml/themes/{*key}", get(reverse_proxy_handler))
-        .route_layer(asset_cache)
-        .fallback(reverse_proxy_handler)
-        .with_state(state.clone())
-        // .layer(TraceLayer::new_for_http())
-        .layer(CookieManagerLayer::new())
-        .layer(RequestDecompressionLayer::new())
-        .layer(CompressionLayer::new());
+    let control_app = build_control_app(&state);
+    let upstream_app = build_upstream_app(&state);
 
     // TODO: Replace with better controls in Control App
     test_dynamic_upstreams(state.clone());
@@ -263,4 +249,102 @@ async fn main() {
     }
 
     info!("Shutdown complete");
+}
+
+// Build app for controlling the configuration of this server
+fn build_control_app(state: &AppState) -> Router {
+    control::router(state.clone())
+        .layer(CookieManagerLayer::new())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new())
+}
+
+// Build the router for the reverse proxy system
+fn build_upstream_app(state: &AppState) -> Router {
+    // Asset cache for any resources that are static and common to all upstream servers
+    let asset_cache =
+        CacheLayer::with_lifespan(state.config.asset_cache_secs).use_stale_on_failure();
+
+    // Global rate limiter for API requests
+    let api_rate_limit_layer = ServiceBuilder::new()
+        .layer(HandleErrorLayer::new(|err: BoxError| async move {
+            error!("API Rate limiter error: {}", err);
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+        }))
+        .layer(BufferLayer::new(state.config.buffer_connections))
+        .layer(RateLimitLayer::new(
+            state.config.api_rate_limit_per_sec,
+            Duration::from_secs(1),
+        ));
+
+    // Global rate limiter for Ultra-Thin requests
+    let ultra_rate_limit_layer = ServiceBuilder::new()
+        .layer(HandleErrorLayer::new(|err: BoxError| async move {
+            error!("Ultra-Thin rate limiter error: {}", err);
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+        }))
+        .layer(BufferLayer::new(state.config.buffer_connections))
+        .layer(RateLimitLayer::new(
+            state.config.ultra_rate_limit_per_sec,
+            Duration::from_secs(1),
+        ));
+
+    // Global rate limiter for Javascript Client requests
+    let jsclient_rate_limit_layer = ServiceBuilder::new()
+        .layer(HandleErrorLayer::new(|err: BoxError| async move {
+            error!("JS Client rate limiter error: {}", err);
+            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+        }))
+        .layer(BufferLayer::new(state.config.buffer_connections))
+        .layer(RateLimitLayer::new(
+            state.config.js_client_rate_limit_per_sec,
+            Duration::from_secs(1),
+        ));
+
+    // Upstream routing
+    Router::new()
+        .merge(
+            Router::new()
+                .route("/favicon.ico", get(reverse_proxy_handler))
+                .route("/jschtml/css/{*key}", get(reverse_proxy_handler))
+                .route("/jschtml/fonts/{*key}", get(reverse_proxy_handler))
+                .route("/jschtml/icons/{*key}", get(reverse_proxy_handler))
+                .route("/jschtml/images/{*key}", get(reverse_proxy_handler))
+                .route("/jschtml/scripts/{*key}", get(reverse_proxy_handler))
+                .route("/jschtml/themes/{*key}", get(reverse_proxy_handler))
+                .route_layer(asset_cache)
+                .with_state(state.clone()),
+        )
+        .merge(
+            Router::new()
+                .route("/jschtml/{*key}", any(reverse_proxy_handler))
+                .route("/jsclient", any(reverse_proxy_handler))
+                .route_layer(jsclient_rate_limit_layer)
+                .with_state(state.clone()),
+        )
+        .merge(
+            Router::new()
+                .route("/ultra", any(reverse_proxy_handler))
+                .route_layer(ultra_rate_limit_layer)
+                .with_state(state.clone()),
+        )
+        .merge(
+            Router::new()
+                .route("/api/{*key}", any(reverse_proxy_handler))
+                .route_layer(api_rate_limit_layer)
+                .with_state(state.clone()),
+        )
+        .fallback(reverse_proxy_handler)
+        .with_state(state.clone())
+        .layer(CookieManagerLayer::new())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new())
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("service error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(LoadShedLayer::new()),
+        )
 }
