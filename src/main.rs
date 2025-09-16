@@ -10,15 +10,6 @@ mod signals;
 mod state;
 mod upstream;
 
-use crate::background::background_task_loop;
-use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
-use crate::database::create_redis_pool;
-use crate::queue::{QueueControl, StoreCapacity};
-use crate::reverse_proxy::reverse_proxy_handler;
-use crate::servers::{redirect_http_to_https, secure_server};
-use crate::signals::shutdown_signal;
-use crate::state::{AppState, Config};
-use crate::upstream::{Upstream, UpstreamPool};
 use axum::routing::get;
 use axum::Router;
 use axum_extra::extract::cookie::Key as PrivateCookieKey;
@@ -35,6 +26,16 @@ use tokio::sync::Notify;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info, Level};
+
+use crate::background::background_task_loop;
+use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
+use crate::database::create_redis_pool;
+use crate::queue::{QueueControl, StoreCapacity};
+use crate::reverse_proxy::reverse_proxy_handler;
+use crate::servers::{redirect_http_to_https, secure_server};
+use crate::signals::shutdown_signal;
+use crate::state::{AppState, Config};
+use crate::upstream::{Upstream, UpstreamPool};
 
 // Testing functions for adding dynamic upstream values
 fn test_dynamic_upstreams(state: AppState) {
