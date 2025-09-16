@@ -15,7 +15,7 @@ use std::time::Duration;
 use tower_cookies::cookie::time::OffsetDateTime;
 use tower_cookies::cookie::{Expiration, SameSite};
 use tower_cookies::{Cookie, Cookies, PrivateCookies};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::errors::Result;
@@ -441,12 +441,12 @@ enum WaitingRoom {
 }
 
 // Get a connection permit for the request, based on the method and path.
-async fn get_connection<'a>(
-    pool: &'a UpstreamPool,
+async fn get_connection(
+    pool: &UpstreamPool,
     connection_type: ConnectionType,
     queue_token: Option<Uuid>,
     timeout: Duration,
-) -> Option<ConnectionPermit<'a>> {
+) -> Option<ConnectionPermit> {
     match connection_type {
         ConnectionType::StickySession => match queue_token {
             Some(id) => pool.acquire_sticky_session_permit(&id, timeout).await,

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::sleep;
-use tracing::{error, info};
+use tracing::error;
 use uuid::Uuid;
 
 /// Upstream specification
@@ -28,30 +28,17 @@ impl Upstream {
 
 /// Guard that contains the locked URI that can be used for a single reverse proxy call,
 /// when the guard is dropped, the permit for that URI is dropped along with it.
-pub struct ConnectionPermit<'a> {
+pub struct ConnectionPermit {
     pub uri: String,
-    upstream_pool: &'a UpstreamPool,
     _permit: Option<OwnedSemaphorePermit>,
 }
 
-impl<'a> ConnectionPermit<'a> {
-    fn new(
-        uri: impl Into<String>,
-        permit: Option<OwnedSemaphorePermit>,
-        upstream_pool: &'a UpstreamPool,
-    ) -> Self {
+impl ConnectionPermit {
+    fn new(uri: impl Into<String>, permit: Option<OwnedSemaphorePermit>) -> Self {
         Self {
             uri: uri.into(),
-            upstream_pool,
             _permit: permit,
         }
-    }
-}
-
-// Create guard that alerts the pool when a URI is freed
-impl<'a> Drop for ConnectionPermit<'a> {
-    fn drop(&mut self) {
-        self.upstream_pool.notify_free_uri(self.uri.clone());
     }
 }
 
@@ -194,7 +181,7 @@ impl UpstreamPool {
 
     /// Return the URI in the pool with the least connections for a cache load.  This circumvents
     /// most locks, since follow-up connections will be fully cached
-    pub async fn acquire_cache_load_permit(&self) -> Option<ConnectionPermit<'_>> {
+    pub async fn acquire_cache_load_permit(&self) -> Option<ConnectionPermit> {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
@@ -205,7 +192,7 @@ impl UpstreamPool {
         // Transform into URIGuard for consumption, or None if no permits were available
         match result {
             Some(uri) => {
-                let guard = ConnectionPermit::new(uri, None, self);
+                let guard = ConnectionPermit::new(uri, None);
                 Some(guard)
             }
             None => None,
@@ -213,10 +200,7 @@ impl UpstreamPool {
     }
 
     /// Return the next available URI in the pool, along with the permit to use it
-    pub async fn acquire_connection_permit(
-        &self,
-        timeout: Duration,
-    ) -> Option<ConnectionPermit<'_>> {
+    pub async fn acquire_connection_permit(&self, timeout: Duration) -> Option<ConnectionPermit> {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
@@ -227,7 +211,7 @@ impl UpstreamPool {
         // Transform into URIGuard for consumption, or None if no permits were available
         match result {
             Some((permit, uri)) => {
-                let guard = ConnectionPermit::new(uri, Some(permit), self);
+                let guard = ConnectionPermit::new(uri, Some(permit));
                 Some(guard)
             }
             None => None,
@@ -239,7 +223,7 @@ impl UpstreamPool {
         &self,
         id: &Uuid,
         timeout: Duration,
-    ) -> Option<ConnectionPermit<'_>> {
+    ) -> Option<ConnectionPermit> {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
@@ -250,7 +234,7 @@ impl UpstreamPool {
         // Transform into URIGuard for consumption, or None if no permits were available
         match result {
             Some((permit, uri)) => {
-                let guard = ConnectionPermit::new(uri, Some(permit), self);
+                let guard = ConnectionPermit::new(uri, Some(permit));
                 Some(guard)
             }
             None => None,
@@ -261,10 +245,6 @@ impl UpstreamPool {
         let guard = self._read_lock().await;
         let upstreams = guard.deref();
         upstreams.expire_sticky(self.sticky_expiry_secs).await
-    }
-
-    fn notify_free_uri(&self, uri: String) {
-        // TODO: Perhaps do something with dropped URIs
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
@@ -428,9 +408,7 @@ impl Pool {
     }
 
     // Acquire a connection URI
-    async fn acquire_sticky_connection_permit(
-        &self,
-    ) -> Option<(usize, OwnedSemaphorePermit, String)> {
+    async fn acquire_sticky_connection_permit(&self) -> Option<(usize, OwnedSemaphorePermit)> {
         let least_sessions = self
             .least_sticky_sessions()
             .await
@@ -439,7 +417,7 @@ impl Pool {
 
         for upstream in least_sessions {
             if let Ok(permit) = upstream.connection_permits.clone().try_acquire_owned() {
-                return Some((upstream.id, permit, upstream.uri.clone()));
+                return Some((upstream.id, permit));
             }
         }
 
@@ -456,7 +434,7 @@ impl Pool {
         let start = Instant::now();
         loop {
             // Try to acquire a connection and a stick session together
-            if let Some((upstream_id, permit, uri)) = self.acquire_sticky_connection_permit().await
+            if let Some((upstream_id, permit)) = self.acquire_sticky_connection_permit().await
                 && let Some(upstream) = self.pool.iter().find(|u| u.id == upstream_id)
                 && let Ok(()) = upstream.try_add_sticky(id).await
             {

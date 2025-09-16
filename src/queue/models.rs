@@ -256,6 +256,7 @@ impl From<QueueSyncTimestamp> for usize {
     }
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 
