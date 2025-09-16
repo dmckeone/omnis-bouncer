@@ -498,3 +498,13 @@ impl Pool {
         self.pool.retain(|server| !uri_set.contains(&server.uri));
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_create_pool() {
+        Pool::new();
+    }
+}
