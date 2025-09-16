@@ -11,7 +11,6 @@ use crate::queue::models::{QueueRotate, StoreCapacity};
 pub struct Scripts {
     check_sync_keys: Script,
     has_ids: Script,
-    id_add: Script,
     id_position: Script,
     id_remove: Script,
     queue_timeout: Script,
@@ -38,7 +37,6 @@ impl Scripts {
         let functions = Self {
             check_sync_keys: Self::read("check_sync_keys")?,
             has_ids: Self::read("has_ids")?,
-            id_add: Self::read("id_add")?,
             id_position: Self::read("id_position")?,
             id_remove: Self::read("id_remove")?,
             queue_timeout: Self::read("queue_timeout")?,
@@ -52,7 +50,6 @@ impl Scripts {
     pub async fn init(&self, conn: &mut Connection) -> Result<()> {
         self.check_sync_keys.load_async(conn).await?;
         self.has_ids.load_async(conn).await?;
-        self.id_add.load_async(conn).await?;
         self.id_position.load_async(conn).await?;
         self.id_remove.load_async(conn).await?;
         self.queue_timeout.load_async(conn).await?;
@@ -89,30 +86,6 @@ impl Scripts {
                 Err(Error::RedisScriptUnreadable(msg))
             }
         }
-    }
-
-    /// Add a UUID to the queue/store with expiration times, returning queue position
-    pub async fn id_add(
-        &self,
-        conn: &mut Connection,
-        prefix: impl Into<String>,
-        id: Uuid,
-        time: u64,
-        validated_expiry: Duration,
-        quarantine_expiry: Duration,
-    ) -> Result<usize> {
-        let prefix = prefix.into();
-        let position = self
-            .id_add
-            .arg(&prefix)
-            .arg(String::from(id))
-            .arg(time)
-            .arg(validated_expiry.as_secs())
-            .arg(quarantine_expiry.as_secs())
-            .invoke_async(conn)
-            .await?;
-
-        Ok(position)
     }
 
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
@@ -266,7 +239,6 @@ mod test {
         let scripts = &[
             "check_sync_keys",
             "has_ids",
-            "id_add",
             "id_position",
             "id_remove",
             "queue_timeout",

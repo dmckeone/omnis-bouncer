@@ -26,7 +26,7 @@ if queue_position then
     return queue_position
 end
 
--- DEV NOTE: All the code below only handles adding new tokens to the queue and should be identical to ID_ADD
+-- DEV NOTE: All the code below handles adding new tokens to the queue, including quarantine -> validated upgrade
 
 -- Check if the store size is -1 (this means the store size is infinite and we don't need to add the token to the queue)
 local max_size = redis.call('GET', ARGV[1] .. ':store_capacity')

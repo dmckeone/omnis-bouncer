@@ -13,7 +13,6 @@ pub struct Config {
     pub id_cookie_name: String,
     pub position_cookie_name: String,
     pub queue_size_cookie_name: String,
-    pub id_http_header: String,
     pub position_http_header: String,
     pub queue_size_http_header: String,
     pub connect_timeout: Duration,
@@ -63,12 +62,5 @@ impl Deref for AppState {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-// this impl tells `PrivateCookieJar` how to access the key from our state
-impl axum::extract::FromRef<AppState> for axum_extra::extract::cookie::Key {
-    fn from_ref(state: &AppState) -> Self {
-        state.config.cookie_secret_key.clone()
     }
 }

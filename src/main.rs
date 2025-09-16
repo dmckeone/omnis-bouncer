@@ -109,6 +109,8 @@ async fn main() {
     let shutdown_future = shutdown_signal(shutdown_handle.clone(), shutdown_notify.clone());
 
     // Build Config
+
+    // TODO: Move cookie master key into configuration parsing
     let base64_master_key =
         "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ==";
 
@@ -126,7 +128,6 @@ async fn main() {
         id_cookie_name: String::from("omnis-bouncer-id"),
         position_cookie_name: String::from("omnis-bouncer-queue-position"),
         queue_size_cookie_name: String::from("omnis-bouncer-queue-size"),
-        id_http_header: String::from("x-omnis-bouncer-id").to_lowercase(), // Must be lowercase
         position_http_header: String::from("x-omnis-bouncer-queue-position").to_lowercase(), // Must be lowercase
         queue_size_http_header: String::from("x-omnis-bouncer-queue-size").to_lowercase(), // Must be lowercase
         connect_timeout: Duration::from_secs(10),
@@ -169,18 +170,17 @@ async fn main() {
 
     // Initialize basic prefix keys, if not yet setup
     if let Ok(has_keys) = queue.check_sync_keys(config.queue_prefix.clone()).await {
-        if !has_keys {
-            if let Err(e) = queue
-                .set_queue_settings(
-                    config.queue_prefix.clone(),
-                    config.queue_enabled,
-                    config.store_capacity,
-                )
-                .await
-            {
-                error!("Failed to initialize queue functions: {:?}", e);
-                return;
-            };
+        let result = queue
+            .set_queue_settings(
+                config.queue_prefix.clone(),
+                config.queue_enabled,
+                config.store_capacity,
+            )
+            .await;
+
+        if !has_keys && let Err(e) = result {
+            error!("Failed to initialize queue functions: {:?}", e);
+            return;
         }
     }
 

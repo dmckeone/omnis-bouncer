@@ -250,32 +250,6 @@ impl QueueControl {
         self.scripts.has_ids(&mut conn, prefix).await
     }
 
-    /// Add a UUID to the queue/store with expiration times, returning queue position
-    pub async fn id_add(
-        &self,
-        prefix: impl Into<String>,
-        id: Uuid,
-        time: Option<u64>,
-    ) -> Result<usize> {
-        let mut conn = self.conn().await?;
-
-        let time = match time {
-            Some(t) => t,
-            None => current_time(&mut conn).await?,
-        };
-
-        self.scripts
-            .id_add(
-                &mut conn,
-                prefix,
-                id,
-                time,
-                self.validated_expiry,
-                self.quarantine_expiry,
-            )
-            .await
-    }
-
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
     pub async fn id_position(
@@ -405,7 +379,7 @@ mod test {
             let id = queue.new_id();
 
             queue
-                .id_add(&prefix, id, time)
+                .id_position(&prefix, id, time)
                 .await
                 .expect("Failed to add new ID to queue");
 
@@ -469,6 +443,21 @@ mod test {
         conn.sadd(&key, &ids)
             .await
             .expect(format!("Failed to store ids: {:?}", ids).as_ref());
+    }
+
+    async fn hget_u64(conn: &mut Connection, key: &String, value: &String) -> u64 {
+        let result: Option<String> = conn
+            .hget(key, value)
+            .await
+            .expect(format!("failed to get fetch {}", key).as_ref());
+
+        let parsed = match result {
+            Some(e) => e
+                .parse::<u64>()
+                .expect(format!("failed to parse u64: {}", key).as_ref()),
+            None => 0,
+        };
+        parsed
     }
 
     async fn test_queue_conn() -> (QueueControl, Connection) {
@@ -876,67 +865,6 @@ mod test {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_id_add() {
-        let prefix = "test_id_add";
-
-        let (queue, mut conn) = test_queue_conn().await;
-
-        // Clear store and initialize store capacity to 1
-        clear_store(prefix, &mut conn).await;
-        queue
-            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
-            .await
-            .expect("Failed to set queue status");
-
-        // Ensure correct, empty starting environment
-        let status = queue
-            .queue_status(prefix)
-            .await
-            .expect("Failed to call queue status");
-        assert_eq!(status.store_size, 0);
-        assert_eq!(status.queue_size, 0);
-
-        // Add new ID to store
-        let id = queue.new_id();
-        queue
-            .id_add(
-                prefix,
-                id,
-                Some(1757510637), // unix time
-            )
-            .await
-            .expect("Failed to add new ID to store");
-
-        let status = queue
-            .queue_status(prefix)
-            .await
-            .expect("Failed to call queue status");
-
-        assert_eq!(status.store_size, 1);
-        assert_eq!(status.queue_size, 0);
-
-        // Add another ID to the store, which should be queued with a store size of only 1
-        let id = queue.new_id();
-        queue
-            .id_add(
-                prefix,
-                id,
-                Some(1757510637), // unix time
-            )
-            .await
-            .expect("Failed to add new ID to queue");
-
-        let status = queue
-            .queue_status(prefix)
-            .await
-            .expect("Failed to call queue status");
-
-        assert_eq!(status.store_size, 1);
-        assert_eq!(status.queue_size, 1);
-    }
-
-    #[tokio::test]
-    #[traced_test]
     async fn test_id_position() {
         let prefix = "test_id_position";
 
@@ -969,6 +897,44 @@ mod test {
             .expect("Failed to get last position");
 
         assert_eq!(position, Position::Queue(count - 1));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_position_upgrade() {
+        let prefix = "test_id_position_upgrade";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 1
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(0))
+            .await
+            .expect("Failed to set queue status");
+
+        let id = queue.new_id();
+        let id_string = String::from(id);
+        let time = 1758040541;
+        let redis_key = format!("{}:queue_expiry_secs", prefix);
+
+        // Add item to the queue for quarantine
+        queue
+            .id_position(prefix, id, Some(time))
+            .await
+            .expect("Failed to add new ID to queue");
+
+        let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
+        assert_eq!(expiry, time + QUARANTINE.as_secs());
+
+        // Fetch position a second time (upgrading the ID from quarantine to validated)
+        queue
+            .id_position(prefix, id, Some(time))
+            .await
+            .expect("Failed to add new ID to queue");
+
+        let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
+        assert_eq!(expiry, time + VALIDATED.as_secs());
     }
 
     #[tokio::test]
