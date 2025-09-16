@@ -39,43 +39,9 @@ use tracing::{error, info, Level};
 // Testing functions for adding dynamic upstream values
 fn test_dynamic_upstreams(state: AppState) {
     tokio::task::spawn(async move {
-        // Wait 1 second to simulate a user change
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        info!("Add");
         state
             .upstream_pool
-            .add_upstreams(&[
-                Upstream::new(String::from("http://127.0.0.1:63111"), 100, 1),
-                Upstream::new(String::from("http://127.0.0.1:63112"), 100, 1),
-                Upstream::new(String::from("http://127.0.0.1:63113"), 100, 1),
-            ])
-            .await;
-        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        info!("Remove");
-        state
-            .upstream_pool
-            .remove_uris(&[
-                String::from("http://127.0.0.1:63111"),
-                String::from("http://127.0.0.1:63112"),
-                String::from("http://127.0.0.1:63113"),
-            ])
-            .await;
-        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
-
-        tokio::time::sleep(Duration::from_secs(1)).await;
-
-        info!("Re-add");
-        state
-            .upstream_pool
-            .add_upstreams(&[Upstream::new(
-                String::from("http://127.0.0.1:63111"),
-                100,
-                1,
-            )])
+            .add_upstreams(&[Upstream::new(String::from("http://127.0.0.1:63111"), 1, 1)])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
     });
@@ -130,6 +96,7 @@ async fn main() {
         queue_size_cookie_name: String::from("omnis-bouncer-queue-size"),
         position_http_header: String::from("x-omnis-bouncer-queue-position").to_lowercase(), // Must be lowercase
         queue_size_http_header: String::from("x-omnis-bouncer-queue-size").to_lowercase(), // Must be lowercase
+        acquire_timeout: Duration::from_secs(10),
         connect_timeout: Duration::from_secs(10),
         cookie_id_expiration: Duration::from_secs(60 * 60 * 24), // 1 day
         sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
@@ -138,7 +105,7 @@ async fn main() {
         https_port: 3001,
         control_port: 2999,
         queue_enabled: true,
-        store_capacity: StoreCapacity::Sized(1),
+        store_capacity: StoreCapacity::Sized(5),
         queue_prefix: String::from("omnis_bouncer"),
         quarantine_expiry: Duration::from_secs(45),
         validated_expiry: Duration::from_secs(600),

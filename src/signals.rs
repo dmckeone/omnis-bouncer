@@ -35,10 +35,8 @@ pub async fn shutdown_signal(handle: Handle, notify: Arc<Notify>) -> anyhow::Res
 
     info!("Received shutdown signal");
 
-    // Notify any tasks waiting for shutdown
-    notify.notify_waiters();
-
     // Notify all axum_server instances to begin graceful shutdown
+    info!("Shutdown web server");
     let shutdown_duration = SHUTDOWN_TIMEOUT;
     handle.graceful_shutdown(Some(shutdown_duration));
 
@@ -47,9 +45,12 @@ pub async fn shutdown_signal(handle: Handle, notify: Arc<Notify>) -> anyhow::Res
     while handle.connection_count() > 0
         || SystemTime::now().duration_since(start)? > shutdown_duration
     {
-        info!("Alive connections: {}", handle.connection_count());
+        info!("Connections Remaining: {}", handle.connection_count());
         sleep(Duration::from_secs(1)).await;
     }
+
+    // Notify any tasks waiting for shutdown after web server has completed
+    notify.notify_waiters();
 
     Ok(())
 }

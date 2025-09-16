@@ -1,7 +1,7 @@
 use std::sync::Arc;
-use tokio::select;
 use tokio::sync::Notify;
 use tokio::time::sleep;
+use tokio::{join, select};
 use tracing::{error, info};
 
 use crate::constants::BACKGROUND_SLEEP_TIME;
@@ -25,7 +25,17 @@ pub async fn background_task_loop(state: AppState, shutdown_notifier: Arc<Notify
 
 /// Tasks that run periodically in the background
 async fn background_tasks(state: AppState) {
-    queue_rotation(state.clone()).await;
+    let _ = join!(
+        expire_sticky_sessions(state.clone()),
+        queue_rotation(state.clone())
+    );
+}
+
+async fn expire_sticky_sessions(state: AppState) {
+    let ids = state.upstream_pool.expire_sticky_sessions().await;
+    if !ids.is_empty() {
+        info!("Expired {} sticky sessions", ids.len());
+    }
 }
 
 /// Queue rotation

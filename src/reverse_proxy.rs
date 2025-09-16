@@ -125,9 +125,21 @@ pub async fn reverse_proxy_handler(
         cookies.remove(Cookie::from(config.position_cookie_name.clone()));
         cookies.remove(Cookie::from(config.queue_size_cookie_name.clone()));
 
-        get_connection(&state.upstream_pool, connection_type, Some(queue_id)).await
+        get_connection(
+            &state.upstream_pool,
+            connection_type,
+            Some(queue_id),
+            config.acquire_timeout,
+        )
+        .await
     } else {
-        get_connection(&state.upstream_pool, connection_type, None).await
+        get_connection(
+            &state.upstream_pool,
+            connection_type,
+            None,
+            config.acquire_timeout,
+        )
+        .await
     };
 
     // Process connection permit
@@ -433,13 +445,14 @@ async fn get_connection<'a>(
     pool: &'a UpstreamPool,
     connection_type: ConnectionType,
     queue_token: Option<Uuid>,
+    timeout: Duration,
 ) -> Option<ConnectionPermit<'a>> {
     match connection_type {
         ConnectionType::StickySession => match queue_token {
-            Some(id) => pool.acquire_sticky_session_permit(&id).await,
+            Some(id) => pool.acquire_sticky_session_permit(&id, timeout).await,
             None => None,
         },
-        ConnectionType::Regular(_) => pool.acquire_connection_permit().await,
+        ConnectionType::Regular(_) => pool.acquire_connection_permit(timeout).await,
         ConnectionType::CacheLoad => pool.acquire_cache_load_permit().await,
         ConnectionType::Reject => panic!("Should never be called with Reject"),
     }

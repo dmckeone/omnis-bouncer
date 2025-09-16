@@ -3,6 +3,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
+use tokio::task::JoinSet;
+use tokio::time::sleep;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -141,9 +143,13 @@ impl UpstreamServer {
     /// # Locking
     /// This function acquires an internal write lock to ensure thread-safe
     /// modification of the sticky sessions.
-    async fn expire_sticky(&self, now: Instant, expiry: Duration) {
+    async fn expire_sticky(&self, now: Instant, expiry: Duration) -> HashSet<Uuid> {
         let mut guard = self.sticky_sessions.write().await;
-        guard.retain(|_, i| now.duration_since(*i) < expiry);
+        let extracted: HashMap<Uuid, Instant> = guard
+            .extract_if(|_, i| now.duration_since(*i) < expiry)
+            .collect();
+
+        extracted.keys().copied().collect()
     }
 
     /// Check if the upstream server sticky session pool is currently full
@@ -207,12 +213,15 @@ impl UpstreamPool {
     }
 
     /// Return the next available URI in the pool, along with the permit to use it
-    pub async fn acquire_connection_permit(&self) -> Option<ConnectionPermit<'_>> {
+    pub async fn acquire_connection_permit(
+        &self,
+        timeout: Duration,
+    ) -> Option<ConnectionPermit<'_>> {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
             let upstreams = guard.deref();
-            upstreams.acquire_connection_permit().await
+            upstreams.acquire_connection_permit(timeout).await
         };
 
         // Transform into URIGuard for consumption, or None if no permits were available
@@ -226,20 +235,16 @@ impl UpstreamPool {
     }
 
     /// Return the next available sticky URI in the pool, along with the permit to use it
-    pub async fn acquire_sticky_session_permit(&self, id: &Uuid) -> Option<ConnectionPermit<'_>> {
+    pub async fn acquire_sticky_session_permit(
+        &self,
+        id: &Uuid,
+        timeout: Duration,
+    ) -> Option<ConnectionPermit<'_>> {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
             let upstreams = guard.deref();
-            match upstreams.acquire_sticky_permit(id).await {
-                Some(r) => Some(r),
-                None => {
-                    // If no permits could be found, expire existing sessions, and see if we can
-                    // find one after that
-                    upstreams.expire_sticky(self.sticky_expiry_secs).await;
-                    upstreams.acquire_sticky_permit(id).await
-                }
-            }
+            upstreams.acquire_sticky_permit(id, timeout).await
         };
 
         // Transform into URIGuard for consumption, or None if no permits were available
@@ -250,6 +255,12 @@ impl UpstreamPool {
             }
             None => None,
         }
+    }
+
+    pub async fn expire_sticky_sessions(&self) -> HashSet<Uuid> {
+        let guard = self._read_lock().await;
+        let upstreams = guard.deref();
+        upstreams.expire_sticky(self.sticky_expiry_secs).await
     }
 
     fn notify_free_uri(&self, uri: String) {
@@ -345,7 +356,10 @@ impl Pool {
     }
 
     /// Acquire a connection URI
-    async fn acquire_connection_permit(&self) -> Option<(OwnedSemaphorePermit, String)> {
+    async fn acquire_connection_permit(
+        &self,
+        timeout: Duration,
+    ) -> Option<(OwnedSemaphorePermit, String)> {
         let least_connections = self
             .least_connections()
             .into_iter()
@@ -356,17 +370,50 @@ impl Pool {
                 return Some((permit, upstream.uri.clone()));
             }
         }
-        None
+
+        // Unable to quickly find a permit.  Create a join set and wait for the next available
+        // semaphore to complete
+        let mut set = JoinSet::new();
+
+        // Add timeout value
+        set.spawn(async move {
+            sleep(timeout).await;
+            None
+        });
+
+        // Add all upstreams
+        for upstream in self.pool.iter().filter(|u| !u.removed) {
+            let permits = upstream.connection_permits.clone();
+            let uri = upstream.uri.clone();
+            set.spawn(async move {
+                match permits.acquire_owned().await {
+                    Ok(permit) => Some((permit, uri)),
+                    Err(e) => {
+                        error!("Connection permit error: {}", e);
+                        None
+                    }
+                }
+            });
+        }
+
+        match set.join_next().await {
+            Some(Ok(permit_pair)) => permit_pair,
+            _ => None,
+        }
     }
 
     /// Acquire a sticky session URI
-    async fn acquire_sticky_permit(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
+    async fn acquire_sticky_permit(
+        &self,
+        id: &Uuid,
+        timeout: Duration,
+    ) -> Option<(OwnedSemaphorePermit, String)> {
         for upstream in self.pool.iter() {
             if upstream.contains_id(id).await {
                 return Self::existing_sticky_uri(upstream);
             }
         }
-        self.new_sticky_uri(id).await
+        self.new_sticky_uri(id, timeout).await
     }
 
     fn existing_sticky_uri(upstream: &UpstreamServer) -> Option<(OwnedSemaphorePermit, String)> {
@@ -380,30 +427,63 @@ impl Pool {
         }
     }
 
-    async fn new_sticky_uri(&self, id: &Uuid) -> Option<(OwnedSemaphorePermit, String)> {
-        let least_sticky = self
+    // Acquire a connection URI
+    async fn acquire_sticky_connection_permit(
+        &self,
+    ) -> Option<(usize, OwnedSemaphorePermit, String)> {
+        let least_sessions = self
             .least_sticky_sessions()
             .await
             .into_iter()
             .filter(Self::acquire_filter);
 
-        for upstream in least_sticky {
-            if let Ok(permit) = upstream.connection_permits.clone().try_acquire_owned()
-                && let Ok(()) = upstream.try_add_sticky(id).await
-            {
-                return Some((permit, upstream.uri.clone()));
+        for upstream in least_sessions {
+            if let Ok(permit) = upstream.connection_permits.clone().try_acquire_owned() {
+                return Some((upstream.id, permit, upstream.uri.clone()));
             }
         }
-        info!("Unable to locate to sticky UUID slot: {}", id);
+
         None
     }
 
-    /// Remove all sticky sessions that have retired
-    async fn expire_sticky(&self, expiry: Duration) {
-        let now = Instant::now();
-        for u in self.pool.iter() {
-            u.expire_sticky(now, expiry).await;
+    /// Attempt to find a new sticky URI by looping for a specified time period until a session is
+    /// found or time runs out
+    async fn new_sticky_uri(
+        &self,
+        id: &Uuid,
+        timeout: Duration,
+    ) -> Option<(OwnedSemaphorePermit, String)> {
+        let start = Instant::now();
+        loop {
+            // Try to acquire a connection and a stick session together
+            if let Some((upstream_id, permit, uri)) = self.acquire_sticky_connection_permit().await
+                && let Some(upstream) = self.pool.iter().find(|u| u.id == upstream_id)
+                && let Ok(()) = upstream.try_add_sticky(id).await
+            {
+                // Found both a connection and a sticky session.
+                return Some((permit, upstream.uri.clone()));
+            }
+
+            // Couldn't find any sessions.  Check if timeout expired
+            let current = Instant::now();
+            if current.duration_since(start) >= timeout {
+                return None;
+            }
+
+            // Not timed out, wait a second (to save CPU) and try again
+            sleep(Duration::from_secs(1)).await;
         }
+    }
+
+    /// Remove all sticky sessions that have retired
+    async fn expire_sticky(&self, expiry: Duration) -> HashSet<Uuid> {
+        let now = Instant::now();
+        let mut removed: HashSet<Uuid> = HashSet::new();
+        for upstream in self.pool.iter() {
+            let upstream_removed = upstream.expire_sticky(now, expiry).await;
+            removed = removed.union(&upstream_removed).copied().collect();
+        }
+        removed
     }
 
     /// vector of all current IDs and URIs in the pool
