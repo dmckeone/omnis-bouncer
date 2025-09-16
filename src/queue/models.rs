@@ -1,6 +1,7 @@
 use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct QueueSettings {
@@ -64,6 +65,37 @@ impl Serialize for StoreCapacity {
             Self::Sized(size) => serializer.serialize_u64(*size as u64),
             Self::Unlimited => serializer.serialize_u64(0),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for StoreCapacity {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StoreCapacityVisitor;
+
+        impl<'de> de::Visitor<'de> for StoreCapacityVisitor {
+            type Value = StoreCapacity;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str(
+                    "-1 for unlimited capacity, or any positive integer for a fixed size",
+                )
+            }
+
+            fn visit_i64<E>(self, value: i64) -> core::result::Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match value {
+                    ..0 => Ok(StoreCapacity::Unlimited),
+                    0.. => Ok(StoreCapacity::Sized(value as usize)),
+                }
+            }
+        }
+
+        deserializer.deserialize_i64(StoreCapacityVisitor)
     }
 }
 
