@@ -8,7 +8,7 @@ use crate::queue::QueueEvent;
 // Generic Error type for all errors in handlers
 #[derive(Debug)]
 pub enum Error {
-    QueueEventSendError(SendError<QueueEvent>),
+    QueueEventLost(SendError<QueueEvent>),
     ControlUIAppMissing,
     QueueEnabledOutOfRange(String),
     StoreCapacityOutOfRange(String),
@@ -25,7 +25,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
-            Error::QueueEventSendError(e) => error!("Error emitting queue broadcast: {}", e),
+            Error::QueueEventLost(e) => error!("Error emitting queue broadcast: {}", e),
             Error::ControlUIAppMissing => error!("Control WebUI files cannot be found"),
             Error::QueueEnabledOutOfRange(size) => error!("queue enabled out of range: {}", size),
             Error::StoreCapacityOutOfRange(size) => error!("store capacity out of range: {}", size),

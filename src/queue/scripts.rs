@@ -235,13 +235,7 @@ impl Scripts {
     /// Determine how many items to transfer from queue to the store based on current sizes
     fn transfer_size(store_capacity: StoreCapacity, queue_size: usize, store_size: usize) -> usize {
         match store_capacity {
-            StoreCapacity::Sized(capacity) => {
-                if store_size <= capacity {
-                    capacity - store_size
-                } else {
-                    0
-                }
-            }
+            StoreCapacity::Sized(capacity) => capacity.saturating_sub(store_size),
             StoreCapacity::Unlimited => queue_size,
         }
     }

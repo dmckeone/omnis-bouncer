@@ -6,12 +6,11 @@ use futures_util::stream::Stream;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
 use std::convert::Infallible;
-use std::time::Duration;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
 use tower_serve_static::{File, ServeDir, ServeFile};
-use tracing::{error, info};
+use tracing::error;
 
 use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
 use crate::control::models::{Event, Settings, SettingsPatch, Status};
