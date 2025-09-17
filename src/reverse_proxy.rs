@@ -50,7 +50,7 @@ lazy_static! {
             .case_insensitive(true)
             .build()
             .unwrap();
-    static ref JSCLIENT_RE: Regex = RegexBuilder::new(r"^/(jschtml|jsclient)")
+    static ref JSCLIENT_RE: Regex = RegexBuilder::new(r"^/(jschtml|jsclient|push)")
         .case_insensitive(true)
         .build()
         .unwrap();

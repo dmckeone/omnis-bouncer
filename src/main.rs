@@ -323,6 +323,7 @@ fn build_upstream_app(state: &AppState) -> Router {
             Router::new()
                 .route("/jschtml/{*key}", any(reverse_proxy_handler))
                 .route("/jsclient", any(reverse_proxy_handler))
+                .route("/push", any(reverse_proxy_handler))
                 .route_layer(jsclient_rate_limit_layer)
                 .with_state(state.clone()),
         )
