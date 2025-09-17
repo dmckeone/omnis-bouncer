@@ -1,3 +1,4 @@
+use async_stream::stream;
 use axum_server::Handle;
 use futures_util::{pin_mut, Stream, StreamExt};
 use std::sync::Arc;
@@ -14,9 +15,8 @@ pub fn cancellable<S>(stream: S, cancel: Arc<Notify>) -> impl Stream<Item = S::I
 where
     S: Stream,
 {
-    async_stream::stream! {
+    stream! {
         pin_mut!(stream);
-
         loop {
             select! {
                 Some(item) = stream.next() => {
