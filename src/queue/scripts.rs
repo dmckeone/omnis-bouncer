@@ -260,7 +260,7 @@ impl Scripts {
             None => current_time(conn).await?,
         };
 
-        let (store_removed, queue_removed) = pipe()
+        let (store_expired, queue_expired) = pipe()
             .atomic()
             .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
             .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
@@ -268,8 +268,8 @@ impl Scripts {
             .await?;
 
         let rotate = QueueRotate {
-            queue_removed,
-            store_removed,
+            queue_expired,
+            store_expired,
             promoted: 0,
         };
 

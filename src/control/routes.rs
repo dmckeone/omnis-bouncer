@@ -1,14 +1,23 @@
-use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
-use crate::control::models::{Settings, SettingsPatch, Status};
-use crate::errors::Result;
-use crate::queue::StoreCapacity;
-use crate::state::AppState;
 use axum::extract::State;
+use axum::response::sse::{Event as SSEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Json, Router};
+use futures_util::stream::Stream;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
+use std::convert::Infallible;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt as _;
 use tower_serve_static::{File, ServeDir, ServeFile};
+use tracing::error;
+
+use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
+use crate::control::models::{Event, Settings, SettingsPatch, Status};
+use crate::errors::Result;
+use crate::queue::{QueueEvent, StoreCapacity};
+use crate::signals::cancellable;
+use crate::state::AppState;
 
 pub fn router<T>(state: AppState) -> Router<T> {
     // Support static file handling from /static directory that is embedded in the final binary
@@ -26,6 +35,7 @@ pub fn router<T>(state: AppState) -> Router<T> {
         .route("/health", get(read_health))
         .route("/api/settings", get(read_settings).patch(patch_settings))
         .route("/api/status", get(read_status))
+        .route("/api/sse", get(server_sent_events))
         .nest_service("/favicon.ico", favicon_service)
         .nest_service("/static", static_service)
         .nest_service("/assets", asset_service)
@@ -99,6 +109,48 @@ async fn read_status(State(state): State<AppState>) -> Result<impl IntoResponse>
 
     let queue_status = queue.queue_status(config.queue_prefix.clone()).await?;
     Ok(Json(Status::from(queue_status)))
+}
+
+/// Translate an incoming queue event into a standard format for events as strings
+fn translate_queue_event(
+    queue_event: core::result::Result<QueueEvent, BroadcastStreamRecvError>,
+) -> Option<core::result::Result<SSEvent, Infallible>> {
+    match queue_event {
+        Ok(ev) => {
+            let event: Event = ev.into();
+            let event_string = match serde_json::to_string(&event) {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to serialize event: {}", e);
+                    return None;
+                }
+            };
+            let sse = SSEvent::default().data(event_string);
+            Some(Ok(sse))
+        }
+        Err(e) => {
+            error!("Failed to receive queue event: {}", e);
+            None
+        }
+    }
+}
+
+/// Stream of events occurring in the server
+async fn server_sent_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = core::result::Result<SSEvent, Infallible>>> {
+    let state = state.clone();
+
+    // Subscribe to queue updates
+    let receiver = state.queue.subscribe();
+
+    // Wrap updates in a stream, and translate into a public facing API
+    let stream = BroadcastStream::new(receiver).filter_map(translate_queue_event);
+
+    // Ensure that the stream doesn't prevent the server from shutting down
+    let stream = cancellable(stream, state.shutdown_notifier.clone());
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 // Fallback handler for the Control UI Single Page Application (SPA)

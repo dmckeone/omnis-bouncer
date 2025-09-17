@@ -31,22 +31,22 @@ pub struct QueueStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueRotate {
-    pub queue_removed: usize,
-    pub store_removed: usize,
+    pub queue_expired: usize,
+    pub store_expired: usize,
     pub promoted: usize,
 }
 
 impl QueueRotate {
     pub fn new(queue_removed: usize, store_removed: usize, promoted: usize) -> Self {
         Self {
-            queue_removed,
-            store_removed,
+            queue_expired: queue_removed,
+            store_expired: store_removed,
             promoted,
         }
     }
 
     pub fn has_changes(&self) -> bool {
-        self.queue_removed > 0 || self.store_removed > 0 || self.promoted > 0
+        self.queue_expired > 0 || self.store_expired > 0 || self.promoted > 0
     }
 }
 
@@ -222,6 +222,17 @@ impl From<QueueEnabled> for String {
             false => String::from("0"),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum QueueEvent {
+    SettingsChanged,
+    WaitingPageChanged,
+    QueueAdded,
+    QueueExpired,
+    StoreAdded,
+    StoreExpired,
+    Removed,
 }
 
 #[cfg(test)]

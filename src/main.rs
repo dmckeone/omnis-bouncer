@@ -82,8 +82,13 @@ async fn main() {
 
     // Create a shutdown handle for graceful shutdown  (must be early in app startup)
     let shutdown_handle = Handle::new();
-    let shutdown_notify = Arc::new(Notify::new());
-    let shutdown_future = shutdown_signal(shutdown_handle.clone(), shutdown_notify.clone());
+    let stream_notify = Arc::new(Notify::new());
+    let background_notify = Arc::new(Notify::new());
+    let shutdown_future = shutdown_signal(
+        shutdown_handle.clone(),
+        stream_notify.clone(),
+        background_notify.clone(),
+    );
 
     // Build Config
 
@@ -178,7 +183,7 @@ async fn main() {
     let upstream_pool = UpstreamPool::new(config.sticky_session_timeout);
 
     // Create our app state
-    let state = AppState::new(config, queue, upstream_pool, client);
+    let state = AppState::new(config, stream_notify, queue, upstream_pool, client);
 
     // Create apps
     let control_app = build_control_app(&state);
@@ -195,7 +200,7 @@ async fn main() {
     let upstream_addr = SocketAddr::from(([0, 0, 0, 0], state.config.https_port));
     let control_addr = SocketAddr::from(([0, 0, 0, 0], state.config.control_port));
 
-    let background_future = background_task_loop(state.clone(), shutdown_notify.clone());
+    let background_future = background_task_loop(state.clone(), background_notify.clone());
 
     info!(
         "HTTP Server running on http://{}:{}",

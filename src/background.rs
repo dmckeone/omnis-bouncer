@@ -50,8 +50,8 @@ async fn queue_rotation(state: AppState) {
         Ok(rotate) => {
             if rotate.has_changes() {
                 info!(
-                    "Queue rotation -- queue removed: {}  store removed: {}  promoted: {}",
-                    rotate.queue_removed, rotate.store_removed, rotate.promoted
+                    "Queue rotation -- queue expired: {}  store expired: {}  promoted: {}",
+                    rotate.queue_expired, rotate.store_expired, rotate.promoted
                 )
             }
         }

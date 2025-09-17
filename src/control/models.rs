@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::queue::{QueueSettings, QueueStatus};
+use crate::queue::{QueueEvent, QueueSettings, QueueStatus};
 
 #[derive(Debug, Serialize)]
 pub struct Settings {
@@ -45,6 +45,38 @@ impl From<QueueStatus> for Status {
             queue_size: status.queue_size,
             store_size: status.store_size,
             updated: status.updated,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum Event {
+    #[serde(rename = "settings:updated")]
+    SettingsChanged,
+    #[serde(rename = "waiting_page:updated")]
+    WaitingPageChanged,
+    #[serde(rename = "queue:added")]
+    QueueAdded,
+    #[serde(rename = "queue:expired")]
+    QueueExpired,
+    #[serde(rename = "queue:removed")]
+    QueueRemoved,
+    #[serde(rename = "store:added")]
+    StoreAdded,
+    #[serde(rename = "store:expired")]
+    StoreExpired,
+}
+
+impl From<QueueEvent> for Event {
+    fn from(queue_event: QueueEvent) -> Self {
+        match queue_event {
+            QueueEvent::SettingsChanged => Self::SettingsChanged,
+            QueueEvent::WaitingPageChanged => Self::WaitingPageChanged,
+            QueueEvent::QueueAdded => Self::QueueAdded,
+            QueueEvent::QueueExpired => Self::QueueExpired,
+            QueueEvent::StoreAdded => Self::StoreAdded,
+            QueueEvent::StoreExpired => Self::StoreExpired,
+            QueueEvent::Removed => Self::QueueRemoved,
         }
     }
 }

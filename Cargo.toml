@@ -9,12 +9,14 @@ axum = { version = "0.8", features = ["http2", "multipart"] }
 axum-extra = { version = "0.10", features = ["cookie", "cookie-key-expansion", "cookie-private", "cookie-signed"] }
 axum-response-cache = "0.4"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
+async-stream = "0.3"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
 http = "1.3"
 http-body-util = "0.1"
 http-types = "2.12"
+futures-util = "0.3"
 include_dir = "0.7"
 lazy_static = "1.5"
 redis = { version = "0.32", features = ["tokio-rustls-comp"] }
@@ -24,6 +26,7 @@ rustls = { version = "0.23", features = ["aws_lc_rs"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.47", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower = { version = "0.5", features = ["buffer", "limit", "load-shed"] }
 tower-cookies = { version = "0.11", features = ["private"] }
 tower-http = { version = "0.6", features = ["auth", "compression-full", "decompression-full", "timeout", "trace", "util", "validate-request", "set-header"] }

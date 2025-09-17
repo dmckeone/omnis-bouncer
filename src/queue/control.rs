@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
 use std::time::Duration;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
@@ -13,12 +14,15 @@ use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
     waiting_page_key, Scripts,
 };
+use crate::queue::QueueEvent;
 
 pub struct QueueControl {
     pool: RedisPool,
     quarantine_expiry: Duration,
     validated_expiry: Duration,
     scripts: Scripts,
+    broadcast: broadcast::Sender<QueueEvent>,
+    _receiver: broadcast::Receiver<QueueEvent>,
 }
 
 impl QueueControl {
@@ -27,11 +31,15 @@ impl QueueControl {
         quarantine_expiry: Duration,
         validated_expiry: Duration,
     ) -> Result<Self> {
+        let (broadcast, receiver) = broadcast::channel::<QueueEvent>(50);
+
         let queue = Self {
             pool,
             quarantine_expiry,
             validated_expiry,
             scripts: Scripts::new()?,
+            broadcast,
+            _receiver: receiver, // Keep a single receiver around so the channel doesn't close
         };
 
         Ok(queue)
@@ -50,6 +58,11 @@ impl QueueControl {
 
     async fn conn(&self) -> Result<Connection> {
         get_connection(&self.pool).await
+    }
+
+    /// Return a broadcast receiver that emits events from the queue
+    pub fn subscribe(&self) -> broadcast::Receiver<QueueEvent> {
+        self.broadcast.subscribe()
     }
 
     /// Set the current status of the queue
@@ -134,6 +147,8 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
+        self.broadcast.send(QueueEvent::SettingsChanged)?;
+
         Ok(())
     }
 
@@ -151,6 +166,8 @@ impl QueueControl {
             .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
+
+        self.broadcast.send(QueueEvent::SettingsChanged)?;
 
         Ok(())
     }
@@ -174,6 +191,8 @@ impl QueueControl {
             .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
+
+        self.broadcast.send(QueueEvent::SettingsChanged)?;
 
         Ok(())
     }
@@ -246,6 +265,8 @@ impl QueueControl {
         let mut conn = self.conn().await?;
         conn.set(waiting_page_key(&prefix), waiting_page).await?;
 
+        self.broadcast.send(QueueEvent::WaitingPageChanged)?;
+
         Ok(())
     }
 
@@ -294,7 +315,9 @@ impl QueueControl {
         time: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let mut conn = self.conn().await?;
-        self.scripts.id_remove(&mut conn, prefix, id, time).await
+        self.scripts.id_remove(&mut conn, prefix, id, time).await?;
+        self.broadcast.send(QueueEvent::Removed)?;
+        Ok(())
     }
 
     /// Full queue rotation using scripts in a pipeline
@@ -304,7 +327,19 @@ impl QueueControl {
         time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts.rotate_full(&mut conn, prefix, time).await
+        let rotate = self.scripts.rotate_full(&mut conn, prefix, time).await?;
+
+        if rotate.promoted > 0 {
+            self.broadcast.send(QueueEvent::StoreAdded)?;
+        }
+        if rotate.queue_expired > 0 {
+            self.broadcast.send(QueueEvent::QueueExpired)?;
+        }
+        if rotate.store_expired > 0 {
+            self.broadcast.send(QueueEvent::StoreExpired)?;
+        }
+
+        Ok(rotate)
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
@@ -314,7 +349,19 @@ impl QueueControl {
         time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
-        self.scripts.rotate_expire(&mut conn, prefix, time).await
+        let rotate = self.scripts.rotate_expire(&mut conn, prefix, time).await?;
+
+        if rotate.promoted > 0 {
+            self.broadcast.send(QueueEvent::StoreAdded)?;
+        }
+        if rotate.queue_expired > 0 {
+            self.broadcast.send(QueueEvent::QueueExpired)?;
+        }
+        if rotate.store_expired > 0 {
+            self.broadcast.send(QueueEvent::StoreExpired)?;
+        }
+
+        Ok(rotate)
     }
 }
 
@@ -1044,8 +1091,8 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.queue_removed, count - 1);
-        assert_eq!(rotation.store_removed, 1);
+        assert_eq!(rotation.queue_expired, count - 1);
+        assert_eq!(rotation.store_expired, 1);
         assert_eq!(rotation.promoted, 0);
     }
 
@@ -1085,8 +1132,8 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.queue_removed, initial_store_count - store_capacity);
-        assert_eq!(rotation.store_removed, store_capacity);
+        assert_eq!(rotation.queue_expired, initial_store_count - store_capacity);
+        assert_eq!(rotation.store_expired, store_capacity);
         assert_eq!(rotation.promoted, store_capacity);
 
         let queue_size = queue
@@ -1128,8 +1175,8 @@ mod test {
             .await
             .expect("Failed to rotate");
 
-        assert_eq!(rotation.queue_removed, count - 1);
-        assert_eq!(rotation.store_removed, 1);
+        assert_eq!(rotation.queue_expired, count - 1);
+        assert_eq!(rotation.store_expired, 1);
         assert_eq!(rotation.promoted, 0);
     }
 }
