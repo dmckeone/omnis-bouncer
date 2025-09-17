@@ -25,10 +25,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::join;
 use tokio::sync::Notify;
-use tower::buffer::{Buffer, BufferLayer};
+use tower::buffer::BufferLayer;
 use tower::limit::RateLimitLayer;
 use tower::load_shed::LoadShedLayer;
-use tower::{ServiceBuilder, ServiceExt};
+use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info, Level};
@@ -48,7 +48,11 @@ fn test_dynamic_upstreams(state: AppState) {
     tokio::task::spawn(async move {
         state
             .upstream_pool
-            .add_upstreams(&[Upstream::new(String::from("http://127.0.0.1:63111"), 1, 1)])
+            .add_upstreams(&[Upstream::new(
+                String::from("http://127.0.0.1:63111"),
+                100,
+                10,
+            )])
             .await;
         info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
     });
