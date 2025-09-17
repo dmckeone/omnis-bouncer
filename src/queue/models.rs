@@ -1,7 +1,6 @@
 use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
-use std::fmt;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct QueueSettings {
@@ -63,7 +62,7 @@ impl Serialize for StoreCapacity {
     {
         match self {
             Self::Sized(size) => serializer.serialize_u64(*size as u64),
-            Self::Unlimited => serializer.serialize_u64(0),
+            Self::Unlimited => serializer.serialize_i64(-1),
         }
     }
 }
@@ -73,29 +72,14 @@ impl<'de> Deserialize<'de> for StoreCapacity {
     where
         D: Deserializer<'de>,
     {
-        struct StoreCapacityVisitor;
-
-        impl<'de> de::Visitor<'de> for StoreCapacityVisitor {
-            type Value = StoreCapacity;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str(
-                    "-1 for unlimited capacity, or any positive integer for a fixed size",
-                )
-            }
-
-            fn visit_i64<E>(self, value: i64) -> core::result::Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match value {
-                    ..0 => Ok(StoreCapacity::Unlimited),
-                    0.. => Ok(StoreCapacity::Sized(value as usize)),
-                }
-            }
+        let value = i64::deserialize(deserializer)?;
+        match value {
+            -1 => Ok(Self::Unlimited),
+            0.. => Ok(Self::Sized(value as usize)),
+            _ => Err(de::Error::custom(
+                "Store capacity must be -1 for unlimited or 0+ for sized",
+            )),
         }
-
-        deserializer.deserialize_i64(StoreCapacityVisitor)
     }
 }
 
@@ -369,10 +353,47 @@ mod test {
         }
 
         #[test]
-        fn test_queue_sync_timestamp_from_option_string_none() {
+        fn test_store_capacity_none_unlimited() {
             let v: Option<String> = None;
             match StoreCapacity::try_from(v) {
                 Ok(StoreCapacity::Unlimited) => assert!(true),
+                _ => assert!(false),
+            }
+        }
+
+        #[test]
+        fn test_store_capacity_serialize_sized() {
+            let capacity = StoreCapacity::Sized(5);
+            let serialized = serde_json::to_string(&capacity).unwrap();
+            assert_eq!(serialized, "5");
+        }
+
+        #[test]
+        fn test_store_capacity_serialize_unlimited() {
+            let capacity = StoreCapacity::Unlimited;
+            assert_eq!(serde_json::to_string(&capacity).unwrap(), "-1");
+        }
+
+        #[test]
+        fn test_store_capacity_deserialize_sized() {
+            let serialized = "3";
+            let actual: StoreCapacity = serde_json::from_str(serialized).unwrap();
+            assert_eq!(actual, StoreCapacity::Sized(3));
+        }
+
+        #[test]
+        fn test_store_capacity_deserialize_unlimited() {
+            let serialized = "-1";
+            let actual: StoreCapacity = serde_json::from_str(serialized).unwrap();
+            assert_eq!(actual, StoreCapacity::Unlimited);
+        }
+
+        #[test]
+        fn test_store_capacity_deserialize_error() {
+            let serialized = "-2";
+            let actual: serde_json::error::Result<StoreCapacity> = serde_json::from_str(serialized);
+            match actual {
+                Err(_) => assert!(true),
                 _ => assert!(false),
             }
         }
