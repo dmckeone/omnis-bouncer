@@ -5,6 +5,7 @@ use tracing::error;
 // Generic Error type for all errors in handlers
 #[derive(Debug)]
 pub enum Error {
+    ControlUIAppMissing,
     QueueEnabledOutOfRange(String),
     StoreCapacityOutOfRange(String),
     QueueSyncTimestampOutOfRange(String),
@@ -20,6 +21,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
+            Error::ControlUIAppMissing => error!("Control WebUI files cannot be found"),
             Error::QueueEnabledOutOfRange(size) => error!("queue enabled out of range: {}", size),
             Error::StoreCapacityOutOfRange(size) => error!("store capacity out of range: {}", size),
             Error::QueueSyncTimestampOutOfRange(size) => {

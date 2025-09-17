@@ -1,3 +1,5 @@
 **.DS_Store
-/target
+ui/dist/
+ui/node_modules/
+target/
 .idea/

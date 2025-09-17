@@ -550,6 +550,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-deps"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64f14468960818ce4f3e3553c32d524446687884f8e7af5d3e252331d8a87e43"
+dependencies = [
+ "glob",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -971,7 +980,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -1893,6 +1902,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "npm_rs"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1454347ca3c562570eff8af4a09445783dc4b7ccd00853390a7f88f76037b55"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1964,12 +1982,14 @@ dependencies = [
  "axum-response-cache",
  "axum-server",
  "base64 0.22.1",
+ "build-deps",
  "deadpool-redis",
  "http",
  "http-body-util",
  "http-types",
  "include_dir",
  "lazy_static",
+ "npm_rs",
  "redis",
  "regex",
  "reqwest",
@@ -2538,7 +2558,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]
@@ -2983,7 +3003,7 @@ dependencies = [
  "getrandom 0.3.3",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]

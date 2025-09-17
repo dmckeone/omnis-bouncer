@@ -7,6 +7,13 @@ pub static REDIS_FUNCTIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR
 // Static directory assets
 pub static STATIC_ASSETS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
+// Control Web UI
+pub static UI_INDEX: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/dist/index.html"));
+pub static UI_FAVICON: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/dist/favicon.ico"));
+pub static UI_ASSET_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/ui/dist/assets");
+
 // Self-signed certs
 pub static SELF_SIGNED_CERT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
