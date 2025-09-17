@@ -56,6 +56,15 @@ pub enum Position {
     Queue(usize),
 }
 
+impl From<usize> for Position {
+    fn from(value: usize) -> Self {
+        match value {
+            0 => Position::Store,
+            1.. => Position::Queue(value),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCapacity {
     Sized(usize),

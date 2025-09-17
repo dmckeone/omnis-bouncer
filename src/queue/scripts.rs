@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection};
 use redis::{pipe, AsyncTypedCommands, Script};
 use std::time::Duration;
@@ -7,6 +8,42 @@ use crate::constants::REDIS_FUNCTIONS_DIR;
 use crate::database::current_time;
 use crate::errors::{Error, Result};
 use crate::queue::models::{QueueRotate, StoreCapacity};
+
+pub fn store_capacity_key(prefix: impl Into<String>) -> String {
+    format!("{}:store_capacity", prefix.into())
+}
+
+pub fn queue_enabled_key(prefix: impl Into<String>) -> String {
+    format!("{}:queue_enabled", prefix.into())
+}
+
+pub fn queue_sync_timestamp_key(prefix: impl Into<String>) -> String {
+    format!("{}:queue_sync_timestamp", prefix.into())
+}
+
+pub fn queue_ids_key(prefix: impl Into<String>) -> String {
+    format!("{}:queue_ids", prefix.into())
+}
+
+pub fn queue_expiry_secs_key(prefix: impl Into<String>) -> String {
+    format!("{}:queue_expiry_secs", prefix.into())
+}
+
+pub fn queue_position_cache_key(prefix: impl Into<String>) -> String {
+    format!("{}:queue_position_cache", prefix.into())
+}
+
+pub fn store_ids_key(prefix: impl Into<String>) -> String {
+    format!("{}:store_ids", prefix.into())
+}
+
+pub fn store_expiry_secs_key(prefix: impl Into<String>) -> String {
+    format!("{}:store_expiry_secs", prefix.into())
+}
+
+pub fn waiting_page_key(prefix: impl Into<String>) -> String {
+    format!("{}:waiting_page", prefix.into())
+}
 
 pub struct Scripts {
     check_sync_keys: Script,
@@ -95,16 +132,22 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
-        time: u64,
+        time: Option<DateTime<Utc>>,
         validated_expiry: Duration,
         quarantine_expiry: Duration,
     ) -> Result<usize> {
         let prefix = prefix.into();
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(conn).await?,
+        };
+
         let position = self
             .id_position
             .arg(prefix)
             .arg(String::from(id))
-            .arg(time)
+            .arg(time.timestamp())
             .arg(validated_expiry.as_secs())
             .arg(quarantine_expiry.as_secs())
             .invoke_async(conn)
@@ -119,14 +162,20 @@ impl Scripts {
         conn: &mut Connection,
         prefix: impl Into<String>,
         id: Uuid,
-        time: u64,
+        time: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let prefix = prefix.into();
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(conn).await?,
+        };
+
         let _: Option<String> = self
             .id_remove
             .arg(&prefix)
             .arg(String::from(id))
-            .arg(time)
+            .arg(time.timestamp())
             .invoke_async(conn)
             .await?;
 
@@ -138,7 +187,7 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
@@ -157,11 +206,11 @@ impl Scripts {
         );
         let result: Result = pipe()
             .atomic()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(time))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
-            .get(format!("{}:store_capacity", prefix))
-            .llen(format!("{}:queue_ids", prefix))
-            .scard(format!("{}:store_ids", prefix))
+            .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
+            .get(store_capacity_key(&prefix))
+            .llen(queue_ids_key(&prefix))
+            .scard(store_ids_key(&prefix))
             .query_async(conn)
             .await?;
 
@@ -202,7 +251,7 @@ impl Scripts {
         &self,
         conn: &mut Connection,
         prefix: impl Into<String>,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let prefix = prefix.into();
 
@@ -213,8 +262,8 @@ impl Scripts {
 
         let (store_removed, queue_removed) = pipe()
             .atomic()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(time))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(time))
+            .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
             .query_async(conn)
             .await?;
 

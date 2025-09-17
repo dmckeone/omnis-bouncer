@@ -30,6 +30,3 @@ pub static BACKGROUND_SLEEP_TIME: Duration = Duration::from_secs(30);
 
 // Web Server
 pub static SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
-
-// Error messages
-pub static ERROR_NULL_STRING: &str = "<null>";

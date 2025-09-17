@@ -1,4 +1,4 @@
-use chrono::DateTime;
+use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
 use std::time::Duration;
@@ -9,7 +9,10 @@ use crate::errors::Result;
 use crate::queue::models::{
     Position, QueueEnabled, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
-use crate::queue::scripts::Scripts;
+use crate::queue::scripts::{
+    queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
+    waiting_page_key, Scripts,
+};
 
 pub struct QueueControl {
     pool: RedisPool,
@@ -53,12 +56,6 @@ impl QueueControl {
     pub async fn queue_status(&self, prefix: impl Into<String>) -> Result<QueueStatus> {
         let prefix = prefix.into();
 
-        let enabled_key = format!("{}:queue_enabled", &prefix);
-        let capacity_key = format!("{}:store_capacity", &prefix);
-        let store_ids_key = format!("{}:store_ids", &prefix);
-        let queue_ids_key = format!("{}:queue_ids", &prefix);
-        let time_key = format!("{}:queue_sync_timestamp", &prefix);
-
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
         type Result = (
@@ -70,11 +67,11 @@ impl QueueControl {
         );
         let result: Result = pipe()
             .atomic()
-            .get(enabled_key)
-            .get(capacity_key)
-            .scard(store_ids_key)
-            .llen(queue_ids_key)
-            .get(time_key)
+            .get(queue_enabled_key(&prefix))
+            .get(store_capacity_key(&prefix))
+            .scard(store_ids_key(&prefix))
+            .llen(queue_ids_key(&prefix))
+            .get(queue_sync_timestamp_key(&prefix))
             .query_async(&mut conn)
             .await?;
 
@@ -96,17 +93,13 @@ impl QueueControl {
     pub async fn queue_settings(&self, prefix: impl Into<String>) -> Result<QueueSettings> {
         let prefix = prefix.into();
 
-        let enabled_key = format!("{}:queue_enabled", &prefix);
-        let capacity_key = format!("{}:store_capacity", &prefix);
-        let time_key = format!("{}:queue_sync_timestamp", &prefix);
-
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
         let result: (Option<isize>, Option<isize>, Option<i64>) = pipe()
             .atomic()
-            .get(enabled_key)
-            .get(capacity_key)
-            .get(time_key)
+            .get(queue_enabled_key(&prefix))
+            .get(store_capacity_key(&prefix))
+            .get(queue_sync_timestamp_key(&prefix))
             .query_async(&mut conn)
             .await?;
 
@@ -123,26 +116,21 @@ impl QueueControl {
     pub async fn set_queue_settings(
         &self,
         prefix: impl Into<String>,
-        enabled: impl Into<QueueEnabled>,
+        enabled: bool,
         capacity: impl Into<StoreCapacity>,
     ) -> Result<()> {
         let prefix = prefix.into();
-        let enabled = enabled.into();
         let capacity = capacity.into();
 
-        let enabled_key = format!("{}:queue_enabled", &prefix);
-        let capacity_key = format!("{}:store_capacity", &prefix);
-        let time_key = format!("{}:queue_sync_timestamp", &prefix);
-
         let mut conn = self.conn().await?;
-        let current_time = current_time(&mut conn).await?;
+        let now = current_time(&mut conn).await?;
 
         // Set all values in single pipeline to ensure atomic consistency
         let _: (Option<String>, Option<String>, Option<String>) = pipe()
             .atomic()
-            .set(enabled_key, isize::from(enabled))
-            .set(capacity_key, isize::from(capacity))
-            .set(time_key, current_time)
+            .set(queue_enabled_key(&prefix), isize::from(enabled))
+            .set(store_capacity_key(&prefix), isize::from(capacity))
+            .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
 
@@ -150,25 +138,17 @@ impl QueueControl {
     }
 
     /// Set the queue enabled status
-    pub async fn set_queue_enabled(
-        &self,
-        prefix: impl Into<String>,
-        enabled: impl Into<QueueEnabled>,
-    ) -> Result<()> {
+    pub async fn set_queue_enabled(&self, prefix: impl Into<String>, enabled: bool) -> Result<()> {
         let prefix = prefix.into();
-        let enabled = enabled.into();
-
-        let enabled_key = format!("{}:queue_enabled", &prefix);
-        let time_key = format!("{}:queue_sync_timestamp", &prefix);
 
         let mut conn = self.conn().await?;
-        let current_time = current_time(&mut conn).await?;
+        let now = current_time(&mut conn).await?;
 
         // Set all values in single pipeline to ensure atomic consistency
         let _: (Option<String>, Option<String>) = pipe()
             .atomic()
-            .set(enabled_key, isize::from(enabled))
-            .set(time_key, current_time)
+            .set(queue_enabled_key(&prefix), isize::from(enabled))
+            .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
 
@@ -184,17 +164,14 @@ impl QueueControl {
         let prefix = prefix.into();
         let capacity = capacity.into();
 
-        let capacity_key = format!("{}:store_capacity", &prefix);
-        let time_key = format!("{}:queue_sync_timestamp", &prefix);
-
         let mut conn = self.conn().await?;
-        let current_time = current_time(&mut conn).await?;
+        let now = current_time(&mut conn).await?;
 
         // Set all values in single pipeline to ensure atomic consistency
         let _: (Option<String>, Option<String>) = pipe()
             .atomic()
-            .set(capacity_key, isize::from(capacity))
-            .set(time_key, current_time)
+            .set(store_capacity_key(&prefix), isize::from(capacity))
+            .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
 
@@ -205,10 +182,8 @@ impl QueueControl {
     pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
         let prefix = prefix.into();
 
-        let key = format!("{}:queue_enabled", prefix);
-
         let mut conn = self.conn().await?;
-        let enabled = conn.get(&key).await?;
+        let enabled = conn.get(queue_enabled_key(&prefix)).await?;
 
         let default = false;
         match enabled {
@@ -224,10 +199,8 @@ impl QueueControl {
     pub async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let prefix = prefix.into();
 
-        let key = format!("{}:queue_ids", prefix);
-
         let mut conn = self.conn().await?;
-        let result = conn.llen(key).await?;
+        let result = conn.llen(queue_ids_key(&prefix)).await?;
 
         Ok(result)
     }
@@ -236,10 +209,8 @@ impl QueueControl {
     pub async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
         let prefix = prefix.into();
 
-        let key = format!("{}:store_capacity", prefix);
-
         let mut conn = self.conn().await?;
-        let result = conn.get(key).await?;
+        let result = conn.get(store_capacity_key(&prefix)).await?;
 
         let capacity = StoreCapacity::try_from(result)?;
         Ok(capacity)
@@ -249,10 +220,8 @@ impl QueueControl {
     pub async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
         let prefix = prefix.into();
 
-        let key = format!("{}:store_ids", prefix);
-
         let mut conn = self.conn().await?;
-        let result = conn.scard(key).await?;
+        let result = conn.scard(store_ids_key(&prefix)).await?;
 
         Ok(result)
     }
@@ -260,10 +229,8 @@ impl QueueControl {
     pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
         let prefix = prefix.into();
 
-        let key = format!("{}:waiting_page", prefix);
-
         let mut conn = self.conn().await?;
-        let result = conn.get(key).await?;
+        let result = conn.get(waiting_page_key(&prefix)).await?;
 
         Ok(result)
     }
@@ -276,10 +243,8 @@ impl QueueControl {
         let prefix = prefix.into();
         let waiting_page = waiting_page.into();
 
-        let key = format!("{}:waiting_page", prefix);
-
         let mut conn = self.conn().await?;
-        conn.set(key, waiting_page).await?;
+        conn.set(waiting_page_key(&prefix), waiting_page).await?;
 
         Ok(())
     }
@@ -302,14 +267,9 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<Position> {
         let mut conn = self.conn().await?;
-
-        let time = match time {
-            Some(t) => t,
-            None => current_time(&mut conn).await?,
-        };
 
         let result = self
             .scripts
@@ -321,15 +281,9 @@ impl QueueControl {
                 self.validated_expiry,
                 self.quarantine_expiry,
             )
-            .await;
+            .await?;
 
-        match result {
-            Ok(pos) => Ok(match pos {
-                0 => Position::Store,
-                1.. => Position::Queue(pos),
-            }),
-            Err(e) => Err(e),
-        }
+        Ok(result.into())
     }
 
     /// Remove a given UUID from the queue/store
@@ -337,15 +291,9 @@ impl QueueControl {
         &self,
         prefix: impl Into<String>,
         id: Uuid,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<()> {
         let mut conn = self.conn().await?;
-
-        let time = match time {
-            Some(t) => t,
-            None => current_time(&mut conn).await?,
-        };
-
         self.scripts.id_remove(&mut conn, prefix, id, time).await
     }
 
@@ -353,7 +301,7 @@ impl QueueControl {
     pub async fn rotate_full(
         &self,
         prefix: impl Into<String>,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
         self.scripts.rotate_full(&mut conn, prefix, time).await
@@ -363,7 +311,7 @@ impl QueueControl {
     pub async fn rotate_expire(
         &self,
         prefix: impl Into<String>,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
         let mut conn = self.conn().await?;
         self.scripts.rotate_expire(&mut conn, prefix, time).await
@@ -373,9 +321,13 @@ impl QueueControl {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::database::test::create_test_pool;
-    use redis::AsyncTypedCommands;
+
     use tracing_test::traced_test;
+
+    use crate::database::test::create_test_pool;
+    use crate::queue::scripts::{
+        queue_expiry_secs_key, queue_position_cache_key, store_expiry_secs_key,
+    };
 
     static QUARANTINE: Duration = Duration::from_secs(45);
     static VALIDATED: Duration = Duration::from_secs(600);
@@ -397,11 +349,11 @@ mod test {
         let prefix = prefix.into();
 
         let keys = &[
-            format!("{}:queue_ids", prefix),
-            format!("{}:queue_position_cache", prefix),
-            format!("{}:queue_expiry_secs", prefix),
-            format!("{}:store_ids", prefix),
-            format!("{}:store_expiry_secs", prefix),
+            queue_ids_key(&prefix),
+            queue_position_cache_key(&prefix),
+            queue_expiry_secs_key(&prefix),
+            store_ids_key(&prefix),
+            store_expiry_secs_key(&prefix),
         ];
 
         for key in keys {
@@ -416,7 +368,7 @@ mod test {
         queue: &QueueControl,
         prefix: impl Into<String>,
         count: usize,
-        time: Option<u64>,
+        time: Option<DateTime<Utc>>,
     ) -> Vec<Uuid> {
         let prefix = prefix.into();
 
@@ -435,11 +387,17 @@ mod test {
         ids
     }
 
-    async fn exists_in_store(prefix: &str, conn: &mut Connection, id: impl Into<String>) -> bool {
+    async fn exists_in_store(
+        prefix: impl Into<String>,
+        conn: &mut Connection,
+        id: impl Into<String>,
+    ) -> bool {
         let id = id.into();
+        let prefix = prefix.into();
+
         let (store_exists, store_expiry_exists): (Option<isize>, Option<isize>) = pipe()
-            .sismember(format!("{}:store_ids", prefix), id.clone())
-            .hexists(format!("{}:store_expiry_secs", prefix), id.clone())
+            .sismember(store_ids_key(&prefix), id.clone())
+            .hexists(store_expiry_secs_key(&prefix), id.clone())
             .query_async(conn)
             .await
             .expect("Failed to check store");
@@ -459,7 +417,7 @@ mod test {
     ) {
         let prefix = prefix.into();
 
-        let key = format!("{}:queue_ids", &prefix);
+        let key = queue_ids_key(prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -479,7 +437,7 @@ mod test {
     ) {
         let prefix = prefix.into();
 
-        let key = format!("{}:store_ids", &prefix);
+        let key = store_ids_key(prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -579,11 +537,11 @@ mod test {
         let (queue, mut conn) = test_queue_conn().await;
 
         // Prepare keys
-        conn.set(format!("{}:queue_enabled", prefix), expected_enabled)
+        conn.set(queue_enabled_key(prefix), expected_enabled)
             .await
             .expect("Failed to set ::queue_enabled");
 
-        conn.set(format!("{}:store_capacity", prefix), raw_capacity)
+        conn.set(store_capacity_key(prefix), raw_capacity)
             .await
             .expect("Failed to set :store_capacity");
 
@@ -662,7 +620,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:queue_enabled", &prefix);
+        let key = queue_enabled_key(prefix);
         conn.set(&key, 1)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -693,7 +651,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:queue_ids", &prefix);
+        let key = queue_ids_key(prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -719,7 +677,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:store_capacity", &prefix);
+        let key = store_capacity_key(prefix);
         conn.set(&key, isize::MAX)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -740,7 +698,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:store_capacity", &prefix);
+        let key = store_capacity_key(prefix);
         conn.set(&key, -1)
             .await
             .expect(format!("Failed to set {}", key).as_ref());
@@ -761,7 +719,7 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        let key = format!("{}:store_ids", &prefix);
+        let key = store_ids_key(prefix);
         conn.del(&key)
             .await
             .expect(format!("Failed to delete {}", key).as_ref());
@@ -812,8 +770,8 @@ mod test {
         let (queue, mut conn) = test_queue_conn().await;
 
         let keys = &[
-            format!("{}:queue_enabled", prefix),
-            format!("{}:store_capacity", prefix),
+            queue_enabled_key(prefix),
+            store_capacity_key(prefix),
             format!("{}:queue_waiting_page", prefix),
             format!("{}:queue_sync_timestamp", prefix),
         ];
@@ -835,11 +793,11 @@ mod test {
 
         let (queue, mut conn) = test_queue_conn().await;
 
-        conn.set(format!("{}:queue_enabled", prefix), 1)
+        conn.set(queue_enabled_key(prefix), 1)
             .await
             .expect("Failed to set :queue_enabled");
 
-        conn.set(format!("{}:store_capacity", prefix), 5)
+        conn.set(store_capacity_key(prefix), 5)
             .await
             .expect("Failed to set :store_capacity");
 
@@ -961,7 +919,7 @@ mod test {
 
         let id = queue.new_id();
         let id_string = String::from(id);
-        let time = 1758040541;
+        let time = DateTime::from_timestamp_secs(1758040541).expect("Failed to create timestamp");
         let redis_key = format!("{}:queue_expiry_secs", prefix);
 
         // Add item to the queue for quarantine
@@ -971,7 +929,7 @@ mod test {
             .expect("Failed to add new ID to queue");
 
         let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
-        assert_eq!(expiry, time + QUARANTINE.as_secs());
+        assert_eq!(expiry, time.timestamp() as u64 + QUARANTINE.as_secs());
 
         // Fetch position a second time (upgrading the ID from quarantine to validated)
         queue
@@ -980,7 +938,7 @@ mod test {
             .expect("Failed to add new ID to queue");
 
         let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
-        assert_eq!(expiry, time + VALIDATED.as_secs());
+        assert_eq!(expiry, time.timestamp() as u64 + VALIDATED.as_secs());
     }
 
     #[tokio::test]
@@ -1041,7 +999,7 @@ mod test {
 
         assert_eq!(exists, true);
 
-        let time = 175760525;
+        let time = DateTime::from_timestamp_secs(175760525).expect("failed to create timestamp");
 
         // "Remove" ID from queue -- really just marks the ID as expired
         queue
@@ -1057,7 +1015,7 @@ mod test {
         let expiry_time = result.unwrap().parse::<u64>().unwrap();
 
         // Verify that the "removal" correctly set the time back by 1 second
-        assert_eq!(expiry_time, time - 1);
+        assert_eq!(expiry_time, time.timestamp() as u64 - 1);
     }
 
     #[tokio::test]
@@ -1074,8 +1032,9 @@ mod test {
             .await
             .expect("Failed to set queue status");
 
-        let insert_time = 1757610168;
-        let rotate_time = insert_time + VALIDATED.as_secs() + 1;
+        let insert_time =
+            DateTime::from_timestamp_secs(1757610168).expect("Failed to create timestamp");
+        let rotate_time = insert_time + VALIDATED + Duration::from_secs(1);
 
         let count = 5;
         let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
@@ -1107,9 +1066,10 @@ mod test {
             .expect("Failed to set queue status");
 
         // Setup timeouts and counts
-        let insert_time_a = 1757613534;
-        let insert_time_b = insert_time_a + (VALIDATED.as_secs() * 2);
-        let rotate_time = insert_time_a + VALIDATED.as_secs() + 1;
+        let insert_time_a =
+            DateTime::from_timestamp_secs(1757613534).expect("Failed to create timestamp");
+        let insert_time_b = insert_time_a + (VALIDATED * 2);
+        let rotate_time = insert_time_a + VALIDATED + Duration::from_secs(1);
 
         let initial_store_count = 3;
         let followup_queue_count = 5;
@@ -1156,8 +1116,9 @@ mod test {
             .await
             .expect("Failed to set queue status");
 
-        let insert_time = 1757610168;
-        let rotate_time = insert_time + VALIDATED.as_secs() + 1;
+        let insert_time =
+            DateTime::from_timestamp_secs(1757610168).expect("Failed to create timestamp");
+        let rotate_time = insert_time + VALIDATED + Duration::from_secs(1);
 
         let count = 5;
         let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
