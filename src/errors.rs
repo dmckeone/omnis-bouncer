@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use tokio::sync::broadcast::error::{RecvError, SendError};
+use tokio::sync::broadcast::error::SendError;
 use tracing::error;
 
 use crate::queue::QueueEvent;
