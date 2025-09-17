@@ -13,15 +13,15 @@ use uuid::Uuid;
 pub struct Upstream {
     pub uri: String,
     pub connections: usize,
-    pub clients: usize,
+    pub sticky_sessions: usize,
 }
 
 impl Upstream {
-    pub fn new(uri: impl Into<String>, connections: usize, clients: usize) -> Self {
+    pub fn new(uri: impl Into<String>, connections: usize, sticky_sessions: usize) -> Self {
         Self {
             uri: uri.into(),
             connections,
-            clients,
+            sticky_sessions,
         }
     }
 }
@@ -74,8 +74,10 @@ impl UpstreamServer {
             id,
             max_connections: upstream.connections,
             connection_permits: Arc::new(Semaphore::new(upstream.connections)),
-            max_sticky_sessions: upstream.clients,
-            sticky_sessions: Arc::new(RwLock::new(HashMap::with_capacity(upstream.clients))),
+            max_sticky_sessions: upstream.sticky_sessions,
+            sticky_sessions: Arc::new(RwLock::new(HashMap::with_capacity(
+                upstream.sticky_sessions,
+            ))),
             uri: upstream.uri,
             removed: false,
         }
