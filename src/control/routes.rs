@@ -6,18 +6,20 @@ use futures_util::stream::Stream;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
 use std::convert::Infallible;
+use std::time::Duration;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
 use tower_serve_static::{File, ServeDir, ServeFile};
-use tracing::error;
+use tracing::{error, info};
 
-use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
+use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
 use crate::control::models::{Event, Settings, SettingsPatch, Status};
 use crate::errors::Result;
 use crate::queue::{QueueEvent, StoreCapacity};
 use crate::signals::cancellable;
 use crate::state::AppState;
+use crate::stream::debounce;
 
 pub fn router<T>(state: AppState) -> Router<T> {
     // Support static file handling from /static directory that is embedded in the final binary
@@ -111,28 +113,33 @@ async fn read_status(State(state): State<AppState>) -> Result<impl IntoResponse>
     Ok(Json(Status::from(queue_status)))
 }
 
-/// Translate an incoming queue event into a standard format for events as strings
-fn translate_queue_event(
+/// Filter out any errors from the Broadcast stream and log them, leaving only valid queue events
+fn filter_queue_event(
     queue_event: core::result::Result<QueueEvent, BroadcastStreamRecvError>,
-) -> Option<core::result::Result<SSEvent, Infallible>> {
+) -> Option<QueueEvent> {
     match queue_event {
-        Ok(ev) => {
-            let event: Event = ev.into();
-            let event_string = match serde_json::to_string(&event) {
-                Ok(s) => s,
-                Err(e) => {
-                    error!("Failed to serialize event: {}", e);
-                    return None;
-                }
-            };
-            let sse = SSEvent::default().data(event_string);
-            Some(Ok(sse))
-        }
+        Ok(ev) => Some(ev),
         Err(e) => {
             error!("Failed to receive queue event: {}", e);
             None
         }
     }
+}
+
+/// Translate an incoming queue event into a standard format for events as strings
+fn translate_queue_event(
+    queue_event: QueueEvent,
+) -> Option<core::result::Result<SSEvent, Infallible>> {
+    let event: Event = queue_event.into();
+    let event_string = match serde_json::to_string(&event) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to serialize event: {}", e);
+            return None;
+        }
+    };
+    let sse = SSEvent::default().data(event_string);
+    Some(Ok(sse))
 }
 
 /// Stream of events occurring in the server
@@ -144,13 +151,19 @@ async fn server_sent_events(
     // Subscribe to queue updates
     let receiver = state.queue.subscribe();
 
+    // Create Broadcast stream that is infallible
+    let broadcast_stream = BroadcastStream::new(receiver).filter_map(filter_queue_event);
+
+    // Deduplicate events across a period of time
+    let debounce_stream = debounce(DEBOUNCE_INTERVAL, broadcast_stream);
+
     // Wrap updates in a stream, and translate into a public facing API
-    let stream = BroadcastStream::new(receiver).filter_map(translate_queue_event);
+    let sse_stream = debounce_stream.filter_map(translate_queue_event);
 
     // Ensure that the stream doesn't prevent the server from shutting down
-    let stream = cancellable(stream, state.shutdown_notifier.clone());
+    let safe_stream = cancellable(sse_stream, state.shutdown_notifier.clone());
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(safe_stream).keep_alive(KeepAlive::default())
 }
 
 // Fallback handler for the Control UI Single Page Application (SPA)

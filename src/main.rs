@@ -8,6 +8,7 @@ mod reverse_proxy;
 mod servers;
 mod signals;
 mod state;
+mod stream;
 mod upstream;
 
 use axum::error_handling::HandleErrorLayer;

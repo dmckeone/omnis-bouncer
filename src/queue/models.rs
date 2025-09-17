@@ -224,7 +224,7 @@ impl From<QueueEnabled> for String {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum QueueEvent {
     SettingsChanged,
     WaitingPageChanged,

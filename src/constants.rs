@@ -29,4 +29,5 @@ pub static SELF_SIGNED_KEY: &[u8] = include_bytes!(concat!(
 pub static BACKGROUND_SLEEP_TIME: Duration = Duration::from_secs(30);
 
 // Web Server
+pub static DEBOUNCE_INTERVAL: Duration = Duration::from_millis(500);
 pub static SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
