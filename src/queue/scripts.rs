@@ -174,7 +174,13 @@ impl Scripts {
 
         // Determine transfer size
         let transfer_size = match store_capacity {
-            StoreCapacity::Sized(capacity) => capacity - store_size,
+            StoreCapacity::Sized(capacity) => {
+                if store_size <= capacity {
+                    capacity - store_size
+                } else {
+                    0
+                }
+            }
             StoreCapacity::Unlimited => queue_size,
         };
 
@@ -183,13 +189,7 @@ impl Scripts {
             .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
             .await?;
 
-        let rotate = QueueRotate {
-            queue_removed,
-            store_removed,
-            promoted,
-        };
-
-        Ok(rotate)
+        Ok(QueueRotate::new(queue_removed, store_removed, promoted))
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store

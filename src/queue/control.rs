@@ -86,7 +86,7 @@ impl QueueControl {
             capacity: StoreCapacity::try_from(result.1)?,
             store_size: result.2.unwrap_or(0),
             queue_size: result.3.unwrap_or(0),
-            sync_timestamp: match result.4 {
+            updated: match result.4 {
                 Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
                 None => 0,
             },
@@ -116,7 +116,7 @@ impl QueueControl {
         let settings = QueueSettings {
             enabled: QueueEnabled::try_from(result.0)?.into(),
             capacity: StoreCapacity::try_from(result.1)?,
-            sync_timestamp: match result.2 {
+            updated: match result.2 {
                 Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
                 None => 0,
             },
@@ -147,6 +147,58 @@ impl QueueControl {
         let _: (Option<String>, Option<String>, Option<String>) = pipe()
             .atomic()
             .set(enabled_key, isize::from(enabled))
+            .set(capacity_key, isize::from(capacity))
+            .set(time_key, current_time)
+            .query_async(&mut conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Set the queue enabled status
+    pub async fn set_queue_enabled(
+        &self,
+        prefix: impl Into<String>,
+        enabled: impl Into<QueueEnabled>,
+    ) -> Result<()> {
+        let prefix = prefix.into();
+        let enabled = enabled.into();
+
+        let enabled_key = format!("{}:queue_enabled", &prefix);
+        let time_key = format!("{}:queue_sync_timestamp", &prefix);
+
+        let mut conn = self.conn().await?;
+        let current_time = current_time(&mut conn).await?;
+
+        // Set all values in single pipeline to ensure atomic consistency
+        let _: (Option<String>, Option<String>) = pipe()
+            .atomic()
+            .set(enabled_key, isize::from(enabled))
+            .set(time_key, current_time)
+            .query_async(&mut conn)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Set the queue enabled status
+    pub async fn set_store_capacity(
+        &self,
+        prefix: impl Into<String>,
+        capacity: impl Into<StoreCapacity>,
+    ) -> Result<()> {
+        let prefix = prefix.into();
+        let capacity = capacity.into();
+
+        let capacity_key = format!("{}:store_capacity", &prefix);
+        let time_key = format!("{}:queue_sync_timestamp", &prefix);
+
+        let mut conn = self.conn().await?;
+        let current_time = current_time(&mut conn).await?;
+
+        // Set all values in single pipeline to ensure atomic consistency
+        let _: (Option<String>, Option<String>) = pipe()
+            .atomic()
             .set(capacity_key, isize::from(capacity))
             .set(time_key, current_time)
             .query_async(&mut conn)
@@ -517,7 +569,7 @@ mod test {
         assert_eq!(result.capacity, expected_capacity);
         assert_eq!(result.store_size, expected_store_size);
         assert_eq!(result.queue_size, expected_queue_size);
-        assert!(result.sync_timestamp > 0);
+        assert!(result.updated > 0);
     }
 
     #[tokio::test]
@@ -556,7 +608,7 @@ mod test {
 
         assert_eq!(result.enabled, expected_enabled);
         assert_eq!(result.capacity, StoreCapacity::from(expected_capacity));
-        assert_eq!(result.sync_timestamp, expected_timestamp);
+        assert_eq!(result.updated, expected_timestamp);
     }
 
     #[tokio::test]
@@ -582,7 +634,7 @@ mod test {
 
         assert_eq!(status.enabled, false);
         assert_eq!(status.capacity, StoreCapacity::Unlimited);
-        assert_eq!(status.sync_timestamp, 0);
+        assert_eq!(status.updated, 0);
     }
 
     #[tokio::test]
@@ -606,7 +658,7 @@ mod test {
 
         assert_eq!(status.enabled, enabled);
         assert_eq!(status.capacity, capacity);
-        assert!(status.sync_timestamp > 0);
+        assert!(status.updated > 0);
     }
 
     #[tokio::test]

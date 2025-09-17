@@ -1,24 +1,35 @@
+use std::default::Default;
+
 use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueSettings {
     pub enabled: bool,
     pub capacity: StoreCapacity,
-    pub sync_timestamp: usize,
+    pub updated: usize, // Unix timestamp -- seconds since epoch (Jan 1 1970)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+impl Default for QueueSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capacity: StoreCapacity::Unlimited,
+            updated: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueStatus {
     pub enabled: bool,
     pub capacity: StoreCapacity,
     pub queue_size: usize,
     pub store_size: usize,
-    pub sync_timestamp: usize,
+    pub updated: usize, // Unix timestamp -- seconds since epoch (Jan 1 1970)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueRotate {
     pub queue_removed: usize,
     pub store_removed: usize,
@@ -26,6 +37,14 @@ pub struct QueueRotate {
 }
 
 impl QueueRotate {
+    pub fn new(queue_removed: usize, store_removed: usize, promoted: usize) -> Self {
+        Self {
+            queue_removed,
+            store_removed,
+            promoted,
+        }
+    }
+
     pub fn has_changes(&self) -> bool {
         self.queue_removed > 0 || self.store_removed > 0 || self.promoted > 0
     }
@@ -37,50 +56,10 @@ pub enum Position {
     Queue(usize),
 }
 
-impl Serialize for Position {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Queue(size) => serializer.serialize_u64(*size as u64),
-            Self::Store => serializer.serialize_u64(0),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreCapacity {
     Sized(usize),
     Unlimited,
-}
-
-impl Serialize for StoreCapacity {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Sized(size) => serializer.serialize_u64(*size as u64),
-            Self::Unlimited => serializer.serialize_i64(-1),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for StoreCapacity {
-    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = i64::deserialize(deserializer)?;
-        match value {
-            -1 => Ok(Self::Unlimited),
-            0.. => Ok(Self::Sized(value as usize)),
-            _ => Err(de::Error::custom(
-                "Store capacity must be -1 for unlimited or 0+ for sized",
-            )),
-        }
-    }
 }
 
 impl TryFrom<Option<String>> for StoreCapacity {
@@ -357,43 +336,6 @@ mod test {
             let v: Option<String> = None;
             match StoreCapacity::try_from(v) {
                 Ok(StoreCapacity::Unlimited) => assert!(true),
-                _ => assert!(false),
-            }
-        }
-
-        #[test]
-        fn test_store_capacity_serialize_sized() {
-            let capacity = StoreCapacity::Sized(5);
-            let serialized = serde_json::to_string(&capacity).unwrap();
-            assert_eq!(serialized, "5");
-        }
-
-        #[test]
-        fn test_store_capacity_serialize_unlimited() {
-            let capacity = StoreCapacity::Unlimited;
-            assert_eq!(serde_json::to_string(&capacity).unwrap(), "-1");
-        }
-
-        #[test]
-        fn test_store_capacity_deserialize_sized() {
-            let serialized = "3";
-            let actual: StoreCapacity = serde_json::from_str(serialized).unwrap();
-            assert_eq!(actual, StoreCapacity::Sized(3));
-        }
-
-        #[test]
-        fn test_store_capacity_deserialize_unlimited() {
-            let serialized = "-1";
-            let actual: StoreCapacity = serde_json::from_str(serialized).unwrap();
-            assert_eq!(actual, StoreCapacity::Unlimited);
-        }
-
-        #[test]
-        fn test_store_capacity_deserialize_error() {
-            let serialized = "-2";
-            let actual: serde_json::error::Result<StoreCapacity> = serde_json::from_str(serialized);
-            match actual {
-                Err(_) => assert!(true),
                 _ => assert!(false),
             }
         }
