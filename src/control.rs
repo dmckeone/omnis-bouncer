@@ -22,7 +22,7 @@ pub fn router<T>(state: AppState) -> Router<T> {
 
     // Reverse proxy app
     Router::new()
-        .route("/api/health", get(health_handler))
+        .route("/health", get(health_handler))
         .route("/api/settings", get(settings_handler))
         .route("/api/status", get(status_handler))
         .nest_service("/favicon.ico", favicon_service)
