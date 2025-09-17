@@ -15,7 +15,7 @@ impl From<QueueSettings> for Settings {
         Self {
             queue_enabled: settings.enabled,
             store_capacity: settings.capacity.into(),
-            updated: DateTime::from_timestamp_secs(settings.updated as i64),
+            updated: settings.updated,
         }
     }
 }
@@ -44,7 +44,7 @@ impl From<QueueStatus> for Status {
             store_capacity: status.capacity.into(),
             queue_size: status.queue_size,
             store_size: status.store_size,
-            updated: DateTime::from_timestamp_secs(status.updated as i64),
+            updated: status.updated,
         }
     }
 }

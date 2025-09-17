@@ -173,7 +173,19 @@ impl Scripts {
         let store_size = result.4.unwrap_or(0);
 
         // Determine transfer size
-        let transfer_size = match store_capacity {
+        let transfer_size = Self::transfer_size(store_capacity, queue_size, store_size);
+
+        // Transfer items from queue to store
+        let promoted = conn
+            .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
+            .await?;
+
+        Ok(QueueRotate::new(queue_removed, store_removed, promoted))
+    }
+
+    /// Determine how many items to transfer from queue to the store based on current sizes
+    fn transfer_size(store_capacity: StoreCapacity, queue_size: usize, store_size: usize) -> usize {
+        match store_capacity {
             StoreCapacity::Sized(capacity) => {
                 if store_size <= capacity {
                     capacity - store_size
@@ -182,14 +194,7 @@ impl Scripts {
                 }
             }
             StoreCapacity::Unlimited => queue_size,
-        };
-
-        // Transfer items from queue to store
-        let promoted = conn
-            .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
-            .await?;
-
-        Ok(QueueRotate::new(queue_removed, store_removed, promoted))
+        }
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store

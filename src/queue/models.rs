@@ -1,13 +1,13 @@
+use chrono::{DateTime, Utc};
 use std::default::Default;
 
-use crate::constants::ERROR_NULL_STRING;
 use crate::errors::{Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QueueSettings {
     pub enabled: bool,
     pub capacity: StoreCapacity,
-    pub updated: usize, // Unix timestamp -- seconds since epoch (Jan 1 1970)
+    pub updated: Option<DateTime<Utc>>,
 }
 
 impl Default for QueueSettings {
@@ -15,7 +15,7 @@ impl Default for QueueSettings {
         Self {
             enabled: false,
             capacity: StoreCapacity::Unlimited,
-            updated: 0,
+            updated: None,
         }
     }
 }
@@ -26,7 +26,7 @@ pub struct QueueStatus {
     pub capacity: StoreCapacity,
     pub queue_size: usize,
     pub store_size: usize,
-    pub updated: usize, // Unix timestamp -- seconds since epoch (Jan 1 1970)
+    pub updated: Option<DateTime<Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -215,67 +215,6 @@ impl From<QueueEnabled> for String {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct QueueSyncTimestamp(pub usize);
-
-impl TryFrom<&str> for QueueSyncTimestamp {
-    type Error = Error;
-    fn try_from(value: &str) -> Result<Self> {
-        let parsed = value.trim().parse::<usize>()?;
-        let timestamp = Self(parsed);
-        Ok(timestamp)
-    }
-}
-
-impl TryFrom<String> for QueueSyncTimestamp {
-    type Error = Error;
-    fn try_from(value: String) -> Result<Self> {
-        Self::try_from(value.as_ref())
-    }
-}
-
-impl TryFrom<Option<isize>> for QueueSyncTimestamp {
-    type Error = Error;
-    fn try_from(value: Option<isize>) -> Result<Self> {
-        match value {
-            Some(v) => Ok(Self::from(v)),
-            None => Err(Error::QueueSyncTimestampOutOfRange(String::from(
-                ERROR_NULL_STRING,
-            ))),
-        }
-    }
-}
-
-impl From<isize> for QueueSyncTimestamp {
-    fn from(value: isize) -> Self {
-        Self(value as usize)
-    }
-}
-
-impl TryFrom<Option<usize>> for QueueSyncTimestamp {
-    type Error = Error;
-    fn try_from(value: Option<usize>) -> Result<Self> {
-        match value {
-            Some(v) => Ok(Self::from(v)),
-            None => Err(Error::QueueSyncTimestampOutOfRange(String::from(
-                ERROR_NULL_STRING,
-            ))),
-        }
-    }
-}
-
-impl From<usize> for QueueSyncTimestamp {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl From<QueueSyncTimestamp> for usize {
-    fn from(value: QueueSyncTimestamp) -> Self {
-        value.0
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
@@ -417,52 +356,6 @@ mod test {
         #[test]
         fn test_bool_from_queue_enabled_false() {
             assert_eq!(bool::from(QueueEnabled(false)), false);
-        }
-    }
-
-    mod queue_sync_timestamp {
-        use super::*;
-
-        #[test]
-        fn test_usize_from_queue_sync_timestamp() {
-            assert_eq!(usize::from(QueueSyncTimestamp(123)), 123);
-        }
-
-        #[test]
-        fn test_queue_sync_timestamp_from_isize() {
-            let value: isize = 456;
-            assert_eq!(QueueSyncTimestamp::from(value), QueueSyncTimestamp(456));
-        }
-
-        #[test]
-        fn test_queue_sync_timestamp_from_usize() {
-            let value: usize = 123;
-            assert_eq!(QueueSyncTimestamp::from(value), QueueSyncTimestamp(123));
-        }
-
-        #[test]
-        fn test_queue_sync_timestamp_from_string() {
-            assert_eq!(
-                QueueSyncTimestamp::try_from("123").unwrap(),
-                QueueSyncTimestamp(123)
-            );
-        }
-
-        #[test]
-        fn test_queue_sync_timestamp_from_option_string_none() {
-            let v: Option<isize> = None;
-            match QueueSyncTimestamp::try_from(v) {
-                Err(Error::QueueSyncTimestampOutOfRange(v)) => assert_eq!(v, ERROR_NULL_STRING),
-                _ => assert!(false),
-            }
-        }
-
-        #[test]
-        fn test_queue_sync_timestamp_from_string_error() {
-            match QueueSyncTimestamp::try_from("abc") {
-                Err(_) => assert!(true),
-                _ => panic!("Should've failed converting 'abc' to a timestamp"),
-            };
         }
     }
 }

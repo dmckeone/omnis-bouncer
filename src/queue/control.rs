@@ -1,3 +1,4 @@
+use chrono::DateTime;
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
 use std::time::Duration;
@@ -6,8 +7,7 @@ use uuid::Uuid;
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
-    Position, QueueEnabled, QueueRotate, QueueSettings, QueueStatus, QueueSyncTimestamp,
-    StoreCapacity,
+    Position, QueueEnabled, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
 use crate::queue::scripts::Scripts;
 
@@ -66,7 +66,7 @@ impl QueueControl {
             Option<isize>,
             Option<usize>,
             Option<usize>,
-            Option<isize>,
+            Option<i64>,
         );
         let result: Result = pipe()
             .atomic()
@@ -86,10 +86,7 @@ impl QueueControl {
             capacity: StoreCapacity::try_from(result.1)?,
             store_size: result.2.unwrap_or(0),
             queue_size: result.3.unwrap_or(0),
-            updated: match result.4 {
-                Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
-                None => 0,
-            },
+            updated: DateTime::from_timestamp_secs(result.4.unwrap_or(0)),
         };
 
         Ok(status)
@@ -105,7 +102,7 @@ impl QueueControl {
 
         // Set all values in single pipeline to ensure atomic consistency
         let mut conn = self.conn().await?;
-        let result: (Option<isize>, Option<isize>, Option<usize>) = pipe()
+        let result: (Option<isize>, Option<isize>, Option<i64>) = pipe()
             .atomic()
             .get(enabled_key)
             .get(capacity_key)
@@ -116,10 +113,7 @@ impl QueueControl {
         let settings = QueueSettings {
             enabled: QueueEnabled::try_from(result.0)?.into(),
             capacity: StoreCapacity::try_from(result.1)?,
-            updated: match result.2 {
-                Some(timestamp) => QueueSyncTimestamp::from(timestamp).into(),
-                None => 0,
-            },
+            updated: DateTime::from_timestamp_secs(result.2.unwrap_or(0)),
         };
 
         Ok(settings)
@@ -569,7 +563,7 @@ mod test {
         assert_eq!(result.capacity, expected_capacity);
         assert_eq!(result.store_size, expected_store_size);
         assert_eq!(result.queue_size, expected_queue_size);
-        assert!(result.updated > 0);
+        assert_ne!(result.updated, None);
     }
 
     #[tokio::test]
@@ -580,7 +574,7 @@ mod test {
         let expected_enabled: bool = true;
         let raw_capacity: isize = 4321;
         let expected_capacity = StoreCapacity::try_from(raw_capacity).unwrap();
-        let expected_timestamp: usize = 1757438630;
+        let expected_timestamp: i64 = 1757438630;
 
         let (queue, mut conn) = test_queue_conn().await;
 
@@ -608,7 +602,7 @@ mod test {
 
         assert_eq!(result.enabled, expected_enabled);
         assert_eq!(result.capacity, StoreCapacity::from(expected_capacity));
-        assert_eq!(result.updated, expected_timestamp);
+        assert_eq!(result.updated.unwrap().timestamp(), expected_timestamp);
     }
 
     #[tokio::test]
@@ -634,7 +628,7 @@ mod test {
 
         assert_eq!(status.enabled, false);
         assert_eq!(status.capacity, StoreCapacity::Unlimited);
-        assert_eq!(status.updated, 0);
+        assert_ne!(status.updated, None);
     }
 
     #[tokio::test]
@@ -658,7 +652,7 @@ mod test {
 
         assert_eq!(status.enabled, enabled);
         assert_eq!(status.capacity, capacity);
-        assert!(status.updated > 0);
+        assert_ne!(status.updated, None);
     }
 
     #[tokio::test]
