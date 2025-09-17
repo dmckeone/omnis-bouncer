@@ -13,14 +13,14 @@ pub fn router<T>(state: AppState) -> Router<T> {
 
     // Reverse proxy app
     Router::new()
-        .route("/health", get(health_handler))
-        .route("/settings", get(settings_handler))
-        .route("/status", get(status_handler))
+        .route("/api/health", get(health_handler))
+        .route("/api/settings", get(settings_handler))
+        .route("/api/status", get(status_handler))
         .nest_service("/static", static_service)
         .with_state(state.clone())
 }
 
-async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+async fn health_handler() -> impl IntoResponse {
     "ok"
 }
 
