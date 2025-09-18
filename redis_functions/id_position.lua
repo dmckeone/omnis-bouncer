@@ -39,16 +39,16 @@ end
 -- DEV NOTE: All the code below handles adding new tokens to the queue, including quarantine -> validated upgrade
 
 -- Check if the store size is -1 (this means the store size is infinite and we don't need to add the token to the queue)
-local max_size = redis.call('GET', ARGV[1] .. ':store_capacity')
-if max_size == false or max_size == nil then
+local store_capacity = redis.call('GET', ARGV[1] .. ':store_capacity')
+if store_capacity == false or store_capacity == nil then
     -- Assume a nil key is an infinite store
-    max_size = -1
+    store_capacity = -1
 else
-    max_size = tonumber(max_size)
+    store_capacity = tonumber(store_capacity)
 end
 
 -- Infinite store, so add to the store
-if max_size < 0 then
+if store_capacity < 0 then
     redis.call('SADD', ARGV[1] .. ':store_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':store_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
 
@@ -74,7 +74,7 @@ end
 -- Check the number of store tokens and see if there is room to add the new token into the store (queue was 0 and
 -- store size is not infinite)
 local current_size = redis.call('SCARD', ARGV[1] .. ':store_ids')
-if current_size ~= nil and current_size < max_size then
+if current_size ~= nil and current_size < store_capacity then
     -- The store has room, add the ID to the store
     redis.call('SADD', ARGV[1] .. ':store_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':store_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry

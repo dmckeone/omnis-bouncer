@@ -1,13 +1,13 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection};
-use redis::{pipe, AsyncTypedCommands, Script};
+use redis::{pipe, Script};
 use std::time::Duration;
 use uuid::Uuid;
 
 use crate::constants::REDIS_FUNCTIONS_DIR;
 use crate::database::current_time;
 use crate::errors::{Error, Result};
-use crate::queue::models::{QueueRotate, StoreCapacity};
+use crate::queue::models::QueueRotate;
 
 pub fn store_capacity_key(prefix: impl Into<String>) -> String {
     format!("{}:store_capacity", prefix.into())
@@ -209,47 +209,21 @@ impl Scripts {
         };
 
         // Run eviction scripts and fetch the new sizes and capacity
-        type Result = (
-            Option<usize>,
-            Option<usize>,
-            Option<isize>,
-            Option<usize>,
-            Option<usize>,
-        );
+        type Result = (Option<usize>, Option<usize>, Option<usize>);
         let result: Result = pipe()
             .atomic()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
-            .get(store_capacity_key(&prefix))
-            .llen(queue_ids_key(&prefix))
-            .scard(store_ids_key(&prefix))
+            .invoke_script(&self.store_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(&self.queue_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(&self.store_promote.arg(&prefix))
             .query_async(conn)
             .await?;
 
         // Unpack the results
         let store_removed = result.0.unwrap_or(0);
         let queue_removed = result.1.unwrap_or(0);
-        let store_capacity = StoreCapacity::try_from(result.2)?;
-        let queue_size = result.3.unwrap_or(0);
-        let store_size = result.4.unwrap_or(0);
-
-        // Determine transfer size
-        let transfer_size = Self::transfer_size(store_capacity, queue_size, store_size);
-
-        // Transfer items from queue to store
-        let promoted = conn
-            .invoke_script(self.store_promote.arg(&prefix).arg(transfer_size))
-            .await?;
+        let promoted = result.2.unwrap_or(0);
 
         Ok(QueueRotate::new(queue_removed, store_removed, promoted))
-    }
-
-    /// Determine how many items to transfer from queue to the store based on current sizes
-    fn transfer_size(store_capacity: StoreCapacity, queue_size: usize, store_size: usize) -> usize {
-        match store_capacity {
-            StoreCapacity::Sized(capacity) => capacity.saturating_sub(store_size),
-            StoreCapacity::Unlimited => queue_size,
-        }
     }
 
     /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
