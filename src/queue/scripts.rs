@@ -9,38 +9,47 @@ use crate::database::current_time;
 use crate::errors::{Error, Result};
 use crate::queue::models::QueueRotate;
 
+#[allow(unused)]
 pub fn store_capacity_key(prefix: impl Into<String>) -> String {
     format!("{}:store_capacity", prefix.into())
 }
 
+#[allow(unused)]
 pub fn queue_enabled_key(prefix: impl Into<String>) -> String {
     format!("{}:queue_enabled", prefix.into())
 }
 
+#[allow(unused)]
 pub fn queue_sync_timestamp_key(prefix: impl Into<String>) -> String {
     format!("{}:queue_sync_timestamp", prefix.into())
 }
 
+#[allow(unused)]
 pub fn queue_ids_key(prefix: impl Into<String>) -> String {
     format!("{}:queue_ids", prefix.into())
 }
 
+#[allow(unused)]
 pub fn queue_expiry_secs_key(prefix: impl Into<String>) -> String {
     format!("{}:queue_expiry_secs", prefix.into())
 }
 
+#[allow(unused)]
 pub fn queue_position_cache_key(prefix: impl Into<String>) -> String {
     format!("{}:queue_position_cache", prefix.into())
 }
 
+#[allow(unused)]
 pub fn store_ids_key(prefix: impl Into<String>) -> String {
     format!("{}:store_ids", prefix.into())
 }
 
+#[allow(unused)]
 pub fn store_expiry_secs_key(prefix: impl Into<String>) -> String {
     format!("{}:store_expiry_secs", prefix.into())
 }
 
+#[allow(unused)]
 pub fn waiting_page_key(prefix: impl Into<String>) -> String {
     format!("{}:waiting_page", prefix.into())
 }
