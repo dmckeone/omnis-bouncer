@@ -12,6 +12,7 @@ use std::io;
 use std::net::SocketAddr;
 
 /// Create an insecure server from an Axum router
+#[allow(unused)]
 pub async fn insecure_server(
     addr: SocketAddr,
     shutdown_handle: Handle,
@@ -23,6 +24,7 @@ pub async fn insecure_server(
 }
 
 /// Create a secure server from an Axum router
+#[allow(unused)]
 pub async fn secure_server(
     addr: SocketAddr,
     tls_config: RustlsConfig,
