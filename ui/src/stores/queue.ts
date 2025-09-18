@@ -34,7 +34,7 @@ export const useQueueStatus = defineStore('queue', () => {
     }
     fetchStatus();
 
-    const eventSource = new EventSource(API_URI + "https://127.0.0.1:2999/api/sse");
+    const eventSource = new EventSource(API_URI + "/api/sse");
     eventSource.onmessage = function (event: MessageEvent) {
         console.log("Event: ", event);
         fetchStatus();
