@@ -3,6 +3,7 @@ use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
 use std::time::Duration;
 use tokio::sync::broadcast;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
@@ -53,6 +54,9 @@ impl QueueControl {
 
     // Create a new ID for use in the Queue
     pub fn new_id(&self) -> Uuid {
+        if let Err(e) = self.broadcast.send(QueueEvent::QueueAdded) {
+            error!("Error emitting new UUID broadcast: {}", e);
+        };
         Uuid::new_v4()
     }
 
@@ -146,6 +150,8 @@ impl QueueControl {
             .set(queue_sync_timestamp_key(&prefix), now.timestamp())
             .query_async(&mut conn)
             .await?;
+
+        let _ = self.rotate_full(&prefix, None).await;
 
         self.broadcast.send(QueueEvent::SettingsChanged)?;
 
@@ -316,7 +322,7 @@ impl QueueControl {
     ) -> Result<()> {
         let mut conn = self.conn().await?;
         self.scripts.id_remove(&mut conn, prefix, id, time).await?;
-        self.broadcast.send(QueueEvent::Removed)?;
+        self.broadcast.send(QueueEvent::QueueRemoved)?;
         Ok(())
     }
 

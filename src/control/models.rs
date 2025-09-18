@@ -76,7 +76,7 @@ impl From<QueueEvent> for Event {
             QueueEvent::QueueExpired => Self::QueueExpired,
             QueueEvent::StoreAdded => Self::StoreAdded,
             QueueEvent::StoreExpired => Self::StoreExpired,
-            QueueEvent::Removed => Self::QueueRemoved,
+            QueueEvent::QueueRemoved => Self::QueueRemoved,
         }
     }
 }

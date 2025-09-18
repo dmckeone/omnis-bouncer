@@ -230,9 +230,9 @@ pub enum QueueEvent {
     WaitingPageChanged,
     QueueAdded,
     QueueExpired,
+    QueueRemoved,
     StoreAdded,
     StoreExpired,
-    Removed,
 }
 
 #[cfg(test)]
