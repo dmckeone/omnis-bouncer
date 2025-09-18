@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use crate::queue::{QueueEvent, QueueSettings, QueueStatus};
 
 #[derive(Debug, Serialize)]
+pub struct Info {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Settings {
     pub queue_enabled: bool,
     pub store_capacity: isize,
@@ -49,21 +54,14 @@ impl From<QueueStatus> for Status {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub enum Event {
-    #[serde(rename = "settings:updated")]
     SettingsChanged,
-    #[serde(rename = "waiting_page:updated")]
     WaitingPageChanged,
-    #[serde(rename = "queue:added")]
     QueueAdded,
-    #[serde(rename = "queue:expired")]
     QueueExpired,
-    #[serde(rename = "queue:removed")]
     QueueRemoved,
-    #[serde(rename = "store:added")]
     StoreAdded,
-    #[serde(rename = "store:expired")]
     StoreExpired,
 }
 
@@ -77,6 +75,20 @@ impl From<QueueEvent> for Event {
             QueueEvent::StoreAdded => Self::StoreAdded,
             QueueEvent::StoreExpired => Self::StoreExpired,
             QueueEvent::QueueRemoved => Self::QueueRemoved,
+        }
+    }
+}
+
+impl From<Event> for String {
+    fn from(event: Event) -> Self {
+        match event {
+            Event::SettingsChanged => String::from("settings:updated"),
+            Event::WaitingPageChanged => String::from("waiting_page:updated"),
+            Event::QueueAdded => String::from("queue:added"),
+            Event::QueueExpired => String::from("queue:expired"),
+            Event::StoreAdded => String::from("store:added"),
+            Event::StoreExpired => String::from("store:expired"),
+            Event::QueueRemoved => String::from("queue:removed"),
         }
     }
 }

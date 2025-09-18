@@ -9,9 +9,16 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
-
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::error;
+
+use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
+use crate::control::models::{Event, Info, Settings, SettingsPatch, Status};
+use crate::errors::Result;
+use crate::queue::{QueueEvent, StoreCapacity};
+use crate::signals::cancellable;
+use crate::state::AppState;
+use crate::stream::debounce;
 
 #[cfg(debug_assertions)]
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
@@ -19,14 +26,6 @@ use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 use http::Method;
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
-
-use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
-use crate::control::models::{Event, Settings, SettingsPatch, Status};
-use crate::errors::Result;
-use crate::queue::{QueueEvent, StoreCapacity};
-use crate::signals::cancellable;
-use crate::state::AppState;
-use crate::stream::debounce;
 
 pub fn router<T>(state: AppState) -> Router<T> {
     // Support static file handling from /static directory that is embedded in the final binary
@@ -43,6 +42,7 @@ pub fn router<T>(state: AppState) -> Router<T> {
     #[allow(unused_mut)]
     let mut router = Router::new()
         .route("/health", get(read_health))
+        .route("/api/info", get(read_info))
         .route("/api/settings", get(read_settings).patch(patch_settings))
         .route("/api/status", get(read_status))
         .route("/api/sse", get(server_sent_events))
@@ -68,6 +68,16 @@ pub fn router<T>(state: AppState) -> Router<T> {
 
 async fn read_health() -> impl IntoResponse {
     "ok"
+}
+
+// Current state of Queue Settings
+async fn read_info(State(state): State<AppState>) -> Result<impl IntoResponse> {
+    let state = state.clone();
+    let config = &state.config;
+    let info = Info {
+        name: config.app_name.clone(),
+    };
+    Ok(Json(info))
 }
 
 // Current state of Queue Settings
@@ -152,13 +162,7 @@ fn translate_queue_event(
     queue_event: QueueEvent,
 ) -> Option<core::result::Result<SSEvent, Infallible>> {
     let event: Event = queue_event.into();
-    let event_string = match serde_json::to_string(&event) {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to serialize event: {}", e);
-            return None;
-        }
-    };
+    let event_string: String = event.into();
     let sse = SSEvent::default().data(event_string);
     Some(Ok(sse))
 }
@@ -178,7 +182,7 @@ async fn server_sent_events(
     // Deduplicate events across a period of time
     let debounce_stream = debounce(DEBOUNCE_INTERVAL, broadcast_stream);
 
-    // Wrap updates in a stream, and translate into a public facing API
+    // Translate into a public facing API
     let sse_stream = debounce_stream.filter_map(translate_queue_event);
 
     // Ensure that the stream doesn't prevent the server from shutting down

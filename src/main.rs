@@ -106,7 +106,7 @@ async fn main() {
     };
 
     let config = Config {
-        app_name: String::from("Omnis Bouncer"),
+        app_name: String::from("Omnis Studio Bouncer"),
         cookie_secret_key,
         id_cookie_name: String::from("omnis-bouncer-id"),
         position_cookie_name: String::from("omnis-bouncer-queue-position"),

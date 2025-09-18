@@ -3,6 +3,10 @@ import {ref} from "vue";
 
 import {API_URI} from '@/constants';
 
+interface AppInfo {
+    name: string
+}
+
 interface QueueStatus {
     queue_enabled: boolean,
     store_capacity: number,
@@ -11,7 +15,13 @@ interface QueueStatus {
     updated?: Date,
 }
 
+const INTERESTING_EVENTS_RE = /^(settings|queue|store):/i;
+
 export const useQueueStatus = defineStore('queue', () => {
+    const info = ref<AppInfo>({
+        name: "Omnis Bouncer"
+    });
+
     const status = ref<QueueStatus>({
         queue_enabled: false,
         store_capacity: 0,
@@ -19,26 +29,39 @@ export const useQueueStatus = defineStore('queue', () => {
         store_size: 0,
     })
 
-    let fetching = false;
+    const fetchInfo = async () => {
+        try {
+            const response = await fetch(API_URI + '/api/info')
+            info.value = await response.json()
+        } finally {
+        }
+    }
+    fetchInfo();
+
+    let fetchingStatus = false;
     const fetchStatus = async () => {
-        if (fetching) {
+        if (fetchingStatus) {
             return;
         }
-        fetching = true;
+        fetchingStatus = true;
         try {
             const response = await fetch(API_URI + '/api/status')
             status.value = await response.json()
         } finally {
-            fetching = false;
+            fetchingStatus = false;
         }
     }
     fetchStatus();
 
     const eventSource = new EventSource(API_URI + "/api/sse");
-    eventSource.onmessage = function (event: MessageEvent) {
-        console.log("Event: ", event);
-        fetchStatus();
+    eventSource.onmessage = function (messageEvent: MessageEvent) {
+        const event = messageEvent.data;
+        const is_interesting = INTERESTING_EVENTS_RE.test(event);
+        console.log(event, is_interesting)
+        if (is_interesting) {
+            fetchStatus();
+        }
     }
 
-    return {status};
+    return {info, status};
 })
