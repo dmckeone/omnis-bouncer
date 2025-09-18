@@ -102,7 +102,8 @@ impl Scripts {
         prefix: impl Into<String>,
     ) -> Result<bool> {
         let prefix = prefix.into();
-        match self.check_sync_keys.arg(&prefix).invoke_async(conn).await? {
+        let result: i32 = self.check_sync_keys.arg(&prefix).invoke_async(conn).await?;
+        match result {
             1 => Ok(true),
             0 => Ok(false),
             val => {
