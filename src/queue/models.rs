@@ -51,16 +51,16 @@ impl QueueRotate {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Position {
+pub enum QueuePosition {
     Store,
     Queue(usize),
 }
 
-impl From<usize> for Position {
+impl From<usize> for QueuePosition {
     fn from(value: usize) -> Self {
         match value {
-            0 => Position::Store,
-            1.. => Position::Queue(value),
+            0 => QueuePosition::Store,
+            1.. => QueuePosition::Queue(value),
         }
     }
 }

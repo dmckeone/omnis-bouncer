@@ -19,7 +19,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::errors::Result;
-use crate::queue::{Position, QueueControl};
+use crate::queue::{QueueControl, QueuePosition};
 use crate::state::{AppState, Config};
 use crate::upstream::{ConnectionPermit, UpstreamPool};
 
@@ -68,7 +68,7 @@ lazy_static! {
         .unwrap();
 }
 
-pub async fn reverse_proxy_handler(
+pub async fn omnis_studio_reverse_proxy(
     State(state): State<AppState>,
     method: Method,
     cookies: Cookies,
@@ -195,16 +195,22 @@ async fn check_waiting_page(
     config: &Config,
     cookies: &Cookies,
     queue: &QueueControl,
-    queue_id: Uuid,
+    queue_id: QueueId,
 ) -> Result<Option<(HeaderMap, axum::body::Body)>> {
     let queue_prefix = config.queue_prefix.clone();
-    let position = queue
-        .id_position(queue_prefix.clone(), queue_id, None)
-        .await?;
+
+    let position = match queue_id {
+        QueueId::New(id) => queue.id_add(queue_prefix.clone(), id.into(), None).await?,
+        QueueId::Existing(id) => {
+            queue
+                .id_position(queue_prefix.clone(), id.into(), None)
+                .await?
+        }
+    };
 
     let position = match position {
-        Position::Queue(pos) => pos,
-        Position::Store => return Ok(None),
+        QueuePosition::Queue(pos) => pos,
+        QueuePosition::Store => return Ok(None),
     };
 
     // Determine general queue status
@@ -332,8 +338,32 @@ fn add_private_server_cookie(
     CookieStatus::Added
 }
 
+#[derive(Copy, Clone, Debug)]
+enum QueueId {
+    New(Uuid),
+    Existing(Uuid),
+}
+
+impl From<QueueId> for String {
+    fn from(queue_id: QueueId) -> Self {
+        match queue_id {
+            QueueId::New(id) => String::from(id),
+            QueueId::Existing(id) => String::from(id),
+        }
+    }
+}
+
+impl From<QueueId> for Uuid {
+    fn from(queue_id: QueueId) -> Self {
+        match queue_id {
+            QueueId::New(id) => id,
+            QueueId::Existing(id) => id,
+        }
+    }
+}
+
 /// Extract a queue token from a cookie
-fn extract_queue_id(queue: &QueueControl, cookie: &Option<Cookie>) -> Uuid {
+fn extract_queue_id(queue: &QueueControl, cookie: &Option<Cookie>) -> QueueId {
     // Extract ID from cookie
     let cookie_id = match cookie {
         Some(c) => match Uuid::parse_str(c.value()) {
@@ -352,8 +382,8 @@ fn extract_queue_id(queue: &QueueControl, cookie: &Option<Cookie>) -> Uuid {
 
     // Return existing ID, or create a new one
     match cookie_id {
-        Some(cookie_id) => cookie_id,
-        None => queue.new_id(),
+        Some(cookie_id) => QueueId::Existing(cookie_id),
+        None => QueueId::New(queue.new_id()),
     }
 }
 
@@ -444,12 +474,15 @@ enum WaitingRoom {
 async fn get_connection(
     pool: &UpstreamPool,
     connection_type: ConnectionType,
-    queue_token: Option<Uuid>,
+    queue_token: Option<QueueId>,
     timeout: Duration,
 ) -> Option<ConnectionPermit> {
     match connection_type {
         ConnectionType::StickySession => match queue_token {
-            Some(id) => pool.acquire_sticky_session_permit(&id, timeout).await,
+            Some(id) => {
+                pool.acquire_sticky_session_permit(&id.into(), timeout)
+                    .await
+            }
             None => None,
         },
         ConnectionType::Regular(_) => pool.acquire_connection_permit(timeout).await,

@@ -38,7 +38,7 @@ use crate::background::background_task_loop;
 use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
 use crate::database::create_redis_pool;
 use crate::queue::{QueueControl, StoreCapacity};
-use crate::reverse_proxy::reverse_proxy_handler;
+use crate::reverse_proxy::omnis_studio_reverse_proxy;
 use crate::servers::{redirect_http_to_https, secure_server};
 use crate::signals::shutdown_signal;
 use crate::state::{AppState, Config};
@@ -130,6 +130,7 @@ async fn main() {
         queue_prefix: String::from("omnis_bouncer"),
         quarantine_expiry: Duration::from_secs(45),
         validated_expiry: Duration::from_secs(600),
+        emit_throttle: Duration::from_millis(500),
     };
 
     // Create Redis Pool
@@ -142,7 +143,12 @@ async fn main() {
     };
 
     // Create queue control and initialize functions
-    let queue = match QueueControl::new(redis, config.quarantine_expiry, config.validated_expiry) {
+    let queue = match QueueControl::new(
+        redis,
+        config.quarantine_expiry,
+        config.validated_expiry,
+        config.emit_throttle,
+    ) {
         Ok(q) => q,
         Err(e) => {
             error!("Failed to initialize queue: {:?}", e);
@@ -151,26 +157,17 @@ async fn main() {
     };
 
     // Initialize queue functions
-    if let Err(e) = queue.init().await {
-        error!("Failed to initialize queue functions: {:?}", e);
+    if let Err(e) = queue
+        .init(
+            &config.queue_prefix,
+            config.queue_enabled,
+            config.store_capacity,
+        )
+        .await
+    {
+        error!("Failed to initialize queue: {:?}", e);
         return;
     };
-
-    // Initialize basic prefix keys, if not yet setup
-    if let Ok(has_keys) = queue.check_sync_keys(config.queue_prefix.clone()).await {
-        let result = queue
-            .set_queue_settings(
-                config.queue_prefix.clone(),
-                config.queue_enabled,
-                config.store_capacity,
-            )
-            .await;
-
-        if !has_keys && let Err(e) = result {
-            error!("Failed to initialize queue functions: {:?}", e);
-            return;
-        }
-    }
 
     // Create a new http client pool
     let client = Client::builder()
@@ -315,37 +312,37 @@ fn build_upstream_app(state: &AppState) -> Router {
     Router::new()
         .merge(
             Router::new()
-                .route("/favicon.ico", get(reverse_proxy_handler))
-                .route("/jschtml/css/{*key}", get(reverse_proxy_handler))
-                .route("/jschtml/fonts/{*key}", get(reverse_proxy_handler))
-                .route("/jschtml/icons/{*key}", get(reverse_proxy_handler))
-                .route("/jschtml/images/{*key}", get(reverse_proxy_handler))
-                .route("/jschtml/scripts/{*key}", get(reverse_proxy_handler))
-                .route("/jschtml/themes/{*key}", get(reverse_proxy_handler))
+                .route("/favicon.ico", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/css/{*key}", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/fonts/{*key}", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/icons/{*key}", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/images/{*key}", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/scripts/{*key}", get(omnis_studio_reverse_proxy))
+                .route("/jschtml/themes/{*key}", get(omnis_studio_reverse_proxy))
                 .route_layer(asset_cache)
                 .with_state(state.clone()),
         )
         .merge(
             Router::new()
-                .route("/jschtml/{*key}", any(reverse_proxy_handler))
-                .route("/jsclient", any(reverse_proxy_handler))
-                .route("/push", any(reverse_proxy_handler))
+                .route("/jschtml/{*key}", any(omnis_studio_reverse_proxy))
+                .route("/jsclient", any(omnis_studio_reverse_proxy))
+                .route("/push", any(omnis_studio_reverse_proxy))
                 .route_layer(jsclient_rate_limit_layer)
                 .with_state(state.clone()),
         )
         .merge(
             Router::new()
-                .route("/ultra", any(reverse_proxy_handler))
+                .route("/ultra", any(omnis_studio_reverse_proxy))
                 .route_layer(ultra_rate_limit_layer)
                 .with_state(state.clone()),
         )
         .merge(
             Router::new()
-                .route("/api/{*key}", any(reverse_proxy_handler))
+                .route("/api/{*key}", any(omnis_studio_reverse_proxy))
                 .route_layer(api_rate_limit_layer)
                 .with_state(state.clone()),
         )
-        .fallback(reverse_proxy_handler)
+        .fallback(omnis_studio_reverse_proxy)
         .with_state(state.clone())
         .layer(CookieManagerLayer::new())
         .layer(RequestDecompressionLayer::new())

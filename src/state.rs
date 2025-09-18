@@ -33,6 +33,7 @@ pub struct Config {
     pub queue_prefix: String,
     pub quarantine_expiry: Duration,
     pub validated_expiry: Duration,
+    pub emit_throttle: Duration,
 }
 
 // Our app state type

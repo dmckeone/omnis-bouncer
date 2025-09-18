@@ -25,21 +25,22 @@ pub async fn background_task_loop(state: AppState, shutdown_notifier: Arc<Notify
 
 /// Tasks that run periodically in the background
 async fn background_tasks(state: AppState) {
-    let _ = join!(
-        expire_sticky_sessions(state.clone()),
-        queue_rotation(state.clone())
-    );
+    let _ = join!(web_tasks(state.clone()), queue_tasks(state.clone()));
 }
 
-async fn expire_sticky_sessions(state: AppState) {
+/// Web
+async fn web_tasks(state: AppState) {
     let ids = state.upstream_pool.expire_sticky_sessions().await;
     if !ids.is_empty() {
         info!("Expired {} sticky sessions", ids.len());
     }
 }
 
-/// Queue rotation
-async fn queue_rotation(state: AppState) {
+/// Queue
+async fn queue_tasks(state: AppState) {
+    // Flush all emit buffer entries
+    state.queue.flush_event_throttle_buffer(None).await;
+
     // Queue rotation
     let result = state
         .queue

@@ -1,15 +1,17 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
-use std::time::Duration;
-use tokio::sync::broadcast;
-use tracing::error;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, RwLock};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
-    Position, QueueEnabled, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
+    QueueEnabled, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
 use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
@@ -24,6 +26,8 @@ pub struct QueueControl {
     scripts: Scripts,
     broadcast: broadcast::Sender<QueueEvent>,
     _receiver: broadcast::Receiver<QueueEvent>,
+    recent_events: RwLock<HashMap<QueueEvent, Instant>>,
+    emit_throttle: Duration,
 }
 
 impl QueueControl {
@@ -31,6 +35,7 @@ impl QueueControl {
         pool: RedisPool,
         quarantine_expiry: Duration,
         validated_expiry: Duration,
+        emit_throttle: Duration,
     ) -> Result<Self> {
         let (broadcast, receiver) = broadcast::channel::<QueueEvent>(50);
 
@@ -41,22 +46,47 @@ impl QueueControl {
             scripts: Scripts::new()?,
             broadcast,
             _receiver: receiver, // Keep a single receiver around so the channel doesn't close
+            recent_events: RwLock::new(HashMap::new()),
+            emit_throttle: emit_throttle,
         };
 
         Ok(queue)
     }
 
-    pub async fn init(&self) -> Result<()> {
+    pub async fn init(
+        &self,
+        prefix: impl Into<String>,
+        enabled: bool,
+        store_capacity: StoreCapacity,
+    ) -> Result<()> {
         let mut conn = self.conn().await?;
         self.scripts.init(&mut conn).await?;
+        self.verify_keys(prefix, enabled, store_capacity).await?;
+        Ok(())
+    }
+
+    /// Verify that startup keys are correct
+    pub async fn verify_keys(
+        &self,
+        prefix: impl Into<String>,
+        enabled: bool,
+        store_capacity: StoreCapacity,
+    ) -> Result<()> {
+        let prefix = prefix.into();
+
+        let result = self.check_sync_keys(&prefix).await;
+        if let Ok(has_keys) = result
+            && !has_keys
+        {
+            self.set_queue_settings(&prefix, enabled, store_capacity)
+                .await?;
+        }
+
         Ok(())
     }
 
     // Create a new ID for use in the Queue
     pub fn new_id(&self) -> Uuid {
-        if let Err(e) = self.broadcast.send(QueueEvent::QueueAdded) {
-            error!("Error emitting new UUID broadcast: {}", e);
-        };
         Uuid::new_v4()
     }
 
@@ -67,6 +97,32 @@ impl QueueControl {
     /// Return a broadcast receiver that emits events from the queue
     pub fn subscribe(&self) -> broadcast::Receiver<QueueEvent> {
         self.broadcast.subscribe()
+    }
+
+    /// Emit an event from this QueueControl, throttled by the emit limit
+    pub async fn emit(&self, event: QueueEvent, now: Option<Instant>) {
+        let guard = self.recent_events.read().await;
+        let now = now.unwrap_or(Instant::now());
+        let instant = (*guard).get(&event);
+
+        if let Some(instant) = instant
+            && now.duration_since(*instant) > self.emit_throttle
+        {
+            // EARLY EXIT: Event was already emitted recently
+            info!("Throttle: {:?}", event);
+            return;
+        }
+
+        if let Err(error) = self.broadcast.send(event.clone()) {
+            error!("Failed to send queue event - \"{:?}\": {}", event, error);
+        }
+    }
+
+    /// Flush the event throttle buffer of any stale events
+    pub async fn flush_event_throttle_buffer(&self, now: Option<Instant>) {
+        let mut guard = self.recent_events.write().await;
+        let now = now.unwrap_or(Instant::now());
+        (*guard).retain(|_, instant| now.duration_since(*instant) < self.emit_throttle);
     }
 
     /// Set the current status of the queue
@@ -151,9 +207,7 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        let _ = self.rotate_full(&prefix, None).await;
-
-        self.broadcast.send(QueueEvent::SettingsChanged)?;
+        self.emit(QueueEvent::SettingsChanged, None).await;
 
         Ok(())
     }
@@ -173,7 +227,7 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        self.broadcast.send(QueueEvent::SettingsChanged)?;
+        self.emit(QueueEvent::SettingsChanged, None).await;
 
         Ok(())
     }
@@ -198,7 +252,7 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        self.broadcast.send(QueueEvent::SettingsChanged)?;
+        self.emit(QueueEvent::SettingsChanged, None).await;
 
         Ok(())
     }
@@ -271,7 +325,7 @@ impl QueueControl {
         let mut conn = self.conn().await?;
         conn.set(waiting_page_key(&prefix), waiting_page).await?;
 
-        self.broadcast.send(QueueEvent::WaitingPageChanged)?;
+        self.emit(QueueEvent::WaitingPageChanged, None).await;
 
         Ok(())
     }
@@ -288,6 +342,24 @@ impl QueueControl {
         self.scripts.has_ids(&mut conn, prefix).await
     }
 
+    pub async fn id_add(
+        &self,
+        prefix: impl Into<String>,
+        id: Uuid,
+        time: Option<DateTime<Utc>>,
+    ) -> Result<QueuePosition> {
+        let position = self.id_position(prefix.into(), id, time).await?;
+
+        let event = match position {
+            QueuePosition::Queue(_) => QueueEvent::QueueAdded,
+            QueuePosition::Store => QueueEvent::StoreAdded,
+        };
+
+        self.emit(event, None).await;
+
+        Ok(position)
+    }
+
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
     pub async fn id_position(
@@ -295,7 +367,7 @@ impl QueueControl {
         prefix: impl Into<String>,
         id: Uuid,
         time: Option<DateTime<Utc>>,
-    ) -> Result<Position> {
+    ) -> Result<QueuePosition> {
         let mut conn = self.conn().await?;
 
         let result = self
@@ -322,7 +394,7 @@ impl QueueControl {
     ) -> Result<()> {
         let mut conn = self.conn().await?;
         self.scripts.id_remove(&mut conn, prefix, id, time).await?;
-        self.broadcast.send(QueueEvent::QueueRemoved)?;
+        self.emit(QueueEvent::QueueRemoved, None).await;
         Ok(())
     }
 
@@ -336,13 +408,13 @@ impl QueueControl {
         let rotate = self.scripts.rotate_full(&mut conn, prefix, time).await?;
 
         if rotate.promoted > 0 {
-            self.broadcast.send(QueueEvent::StoreAdded)?;
+            self.emit(QueueEvent::StoreAdded, None).await;
         }
         if rotate.queue_expired > 0 {
-            self.broadcast.send(QueueEvent::QueueExpired)?;
+            self.emit(QueueEvent::QueueExpired, None).await;
         }
         if rotate.store_expired > 0 {
-            self.broadcast.send(QueueEvent::StoreExpired)?;
+            self.emit(QueueEvent::StoreExpired, None).await;
         }
 
         Ok(rotate)
@@ -358,13 +430,13 @@ impl QueueControl {
         let rotate = self.scripts.rotate_expire(&mut conn, prefix, time).await?;
 
         if rotate.promoted > 0 {
-            self.broadcast.send(QueueEvent::StoreAdded)?;
+            self.emit(QueueEvent::StoreAdded, None).await;
         }
         if rotate.queue_expired > 0 {
-            self.broadcast.send(QueueEvent::QueueExpired)?;
+            self.emit(QueueEvent::QueueExpired, None).await;
         }
         if rotate.store_expired > 0 {
-            self.broadcast.send(QueueEvent::StoreExpired)?;
+            self.emit(QueueEvent::StoreExpired, None).await;
         }
 
         Ok(rotate)
@@ -384,10 +456,12 @@ mod test {
 
     static QUARANTINE: Duration = Duration::from_secs(45);
     static VALIDATED: Duration = Duration::from_secs(600);
+    static EMIT_THROTTLE: Duration = Duration::from_secs(100);
 
     fn test_queue() -> QueueControl {
         let pool = create_test_pool().expect("Failed to create test pool");
-        QueueControl::new(pool, QUARANTINE, VALIDATED).expect("Failed to create test QueueControl")
+        QueueControl::new(pool, QUARANTINE, VALIDATED, EMIT_THROTTLE)
+            .expect("Failed to create test QueueControl")
     }
 
     fn generate_ids(queue: &QueueControl, count: usize) -> Vec<String> {
@@ -534,14 +608,31 @@ mod test {
             return;
         };
 
-        QueueControl::new(pool, QUARANTINE, VALIDATED).expect("QueueControl::new() failed");
+        QueueControl::new(pool, QUARANTINE, VALIDATED, EMIT_THROTTLE)
+            .expect("QueueControl::new() failed");
+    }
+
+    async fn clean_keys(prefix: impl Into<String>) {
+        let prefix = prefix.into();
+        let (_, mut conn) = test_queue_conn().await;
+        let keys = conn.keys(format!("{}:*", &prefix)).await.unwrap();
+        for key in keys.iter() {
+            conn.del(key).await.unwrap();
+        }
     }
 
     #[tokio::test]
     #[traced_test]
     async fn test_init() {
+        let prefix = "test_init";
+
         let queue = test_queue();
-        queue.init().await.expect("QueueControl::init() failed");
+        queue
+            .init(prefix, false, StoreCapacity::Unlimited)
+            .await
+            .expect("QueueControl::init() failed");
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -575,6 +666,8 @@ mod test {
         assert_eq!(result.store_size, expected_store_size);
         assert_eq!(result.queue_size, expected_queue_size);
         assert_ne!(result.updated, None);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -614,6 +707,8 @@ mod test {
         assert_eq!(result.enabled, expected_enabled);
         assert_eq!(result.capacity, StoreCapacity::from(expected_capacity));
         assert_eq!(result.updated.unwrap().timestamp(), expected_timestamp);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -640,6 +735,8 @@ mod test {
         assert_eq!(status.enabled, false);
         assert_eq!(status.capacity, StoreCapacity::Unlimited);
         assert_ne!(status.updated, None);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -664,6 +761,8 @@ mod test {
         assert_eq!(status.enabled, enabled);
         assert_eq!(status.capacity, capacity);
         assert_ne!(status.updated, None);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -695,6 +794,8 @@ mod test {
             .expect("Failed to call queue_enabled");
 
         assert_eq!(actual, false);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -721,6 +822,8 @@ mod test {
             .expect("Failed to call queue_size");
 
         assert_eq!(actual, count);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -742,6 +845,8 @@ mod test {
 
         let expected = StoreCapacity::Sized(isize::MAX as usize);
         assert_eq!(actual, expected);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -763,6 +868,8 @@ mod test {
 
         let expected = StoreCapacity::Unlimited;
         assert_eq!(actual, expected);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -790,6 +897,8 @@ mod test {
             .expect("Failed to call store_size");
 
         assert_eq!(actual, count);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -813,6 +922,8 @@ mod test {
             .expect("waiting page is None");
 
         assert_eq!(actual, expected);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -837,6 +948,8 @@ mod test {
             .expect("Failed to call check_sync_keys");
 
         assert_eq!(actual, false);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -868,6 +981,8 @@ mod test {
             .expect("Failed to call check_sync_keys");
 
         assert_eq!(actual, true);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -881,6 +996,8 @@ mod test {
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
 
         assert!(actual);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -893,6 +1010,8 @@ mod test {
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -906,6 +1025,8 @@ mod test {
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, true);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -918,6 +1039,8 @@ mod test {
 
         let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
         assert_eq!(actual, false);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -945,7 +1068,7 @@ mod test {
             .await
             .expect("Failed to get first position");
 
-        assert_eq!(position, Position::Store);
+        assert_eq!(position, QueuePosition::Store);
 
         // Check that the last ID is at the back of the line (queue positions are indexed from 1)
         let position = queue
@@ -953,7 +1076,9 @@ mod test {
             .await
             .expect("Failed to get last position");
 
-        assert_eq!(position, Position::Queue(count - 1));
+        assert_eq!(position, QueuePosition::Queue(count - 1));
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -992,6 +1117,8 @@ mod test {
 
         let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
         assert_eq!(expiry, time.timestamp() as u64 + VALIDATED.as_secs());
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -1024,6 +1151,8 @@ mod test {
 
         let exists = exists_in_store(prefix, &mut conn, store_id_string.clone()).await;
         assert_eq!(exists, false);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -1069,6 +1198,8 @@ mod test {
 
         // Verify that the "removal" correctly set the time back by 1 second
         assert_eq!(expiry_time, time.timestamp() as u64 - 1);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -1100,6 +1231,8 @@ mod test {
         assert_eq!(rotation.queue_expired, count - 1);
         assert_eq!(rotation.store_expired, 1);
         assert_eq!(rotation.promoted, 0);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -1152,7 +1285,9 @@ mod test {
             .store_size(prefix)
             .await
             .expect("Failed to get store size");
-        assert_eq!(store_size, store_capacity)
+        assert_eq!(store_size, store_capacity);
+
+        clean_keys(prefix).await;
     }
 
     #[tokio::test]
@@ -1184,5 +1319,7 @@ mod test {
         assert_eq!(rotation.queue_expired, count - 1);
         assert_eq!(rotation.store_expired, 1);
         assert_eq!(rotation.promoted, 0);
+
+        clean_keys(prefix).await;
     }
 }
