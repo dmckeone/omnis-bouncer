@@ -199,14 +199,9 @@ async fn check_waiting_page(
 ) -> Result<Option<(HeaderMap, axum::body::Body)>> {
     let queue_prefix = config.queue_prefix.clone();
 
-    let position = match queue_id {
-        QueueId::New(id) => queue.id_add(queue_prefix.clone(), id.into(), None).await?,
-        QueueId::Existing(id) => {
-            queue
-                .id_position(queue_prefix.clone(), id.into(), None)
-                .await?
-        }
-    };
+    let position = queue
+        .id_position(queue_prefix.clone(), queue_id.into(), None)
+        .await?;
 
     let position = match position {
         QueuePosition::Queue(pos) => pos,

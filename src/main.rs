@@ -119,9 +119,9 @@ async fn main() {
         sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
         asset_cache_secs: Duration::from_secs(60),
         buffer_connections: 10000,
-        js_client_rate_limit_per_sec: 100,
-        api_rate_limit_per_sec: 1,
-        ultra_rate_limit_per_sec: 2,
+        js_client_rate_limit_per_sec: 0,
+        api_rate_limit_per_sec: 0,
+        ultra_rate_limit_per_sec: 0,
         http_port: 3000,
         https_port: 3001,
         control_port: 2999,
@@ -130,7 +130,7 @@ async fn main() {
         queue_prefix: String::from("omnis_bouncer"),
         quarantine_expiry: Duration::from_secs(45),
         validated_expiry: Duration::from_secs(600),
-        emit_throttle: Duration::from_millis(500),
+        emit_throttle: Duration::from_millis(100),
     };
 
     // Create Redis Pool
@@ -268,80 +268,94 @@ fn build_control_app(state: &AppState) -> Router {
 
 // Build the router for the reverse proxy system
 fn build_upstream_app(state: &AppState) -> Router {
+    let config = &state.config;
+
     // Asset cache for any resources that are static and common to all upstream servers
-    let asset_cache =
-        CacheLayer::with_lifespan(state.config.asset_cache_secs).use_stale_on_failure();
+    let asset_cache = CacheLayer::with_lifespan(config.asset_cache_secs).use_stale_on_failure();
 
-    // Global rate limiter for API requests
-    let api_rate_limit_layer = ServiceBuilder::new()
-        .layer(HandleErrorLayer::new(|err: BoxError| async move {
-            error!("API Rate limiter error: {}", err);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-        }))
-        .layer(BufferLayer::new(state.config.buffer_connections))
-        .layer(RateLimitLayer::new(
-            state.config.api_rate_limit_per_sec,
-            Duration::from_secs(1),
-        ));
+    let cache_router = Router::new()
+        .route("/favicon.ico", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/css/{*key}", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/fonts/{*key}", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/icons/{*key}", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/images/{*key}", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/scripts/{*key}", get(omnis_studio_reverse_proxy))
+        .route("/jschtml/themes/{*key}", get(omnis_studio_reverse_proxy))
+        .route_layer(asset_cache)
+        .with_state(state.clone());
 
-    // Global rate limiter for Ultra-Thin requests
-    let ultra_rate_limit_layer = ServiceBuilder::new()
-        .layer(HandleErrorLayer::new(|err: BoxError| async move {
-            error!("Ultra-Thin rate limiter error: {}", err);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-        }))
-        .layer(BufferLayer::new(state.config.buffer_connections))
-        .layer(RateLimitLayer::new(
-            state.config.ultra_rate_limit_per_sec,
-            Duration::from_secs(1),
-        ));
+    // --------------------------------------------------------------------------------------------
+    // API
+    // --------------------------------------------------------------------------------------------
+    let mut api_router = Router::new().route("/api/{*key}", any(omnis_studio_reverse_proxy));
 
-    // Global rate limiter for Javascript Client requests
-    let jsclient_rate_limit_layer = ServiceBuilder::new()
-        .layer(HandleErrorLayer::new(|err: BoxError| async move {
-            error!("JS Client rate limiter error: {}", err);
-            (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-        }))
-        .layer(BufferLayer::new(state.config.buffer_connections))
-        .layer(RateLimitLayer::new(
-            state.config.js_client_rate_limit_per_sec,
-            Duration::from_secs(1),
-        ));
+    if state.config.api_rate_limit_per_sec > 0 {
+        api_router = api_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("API Rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    config.api_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+    let api_router = api_router.with_state(state.clone());
+
+    // --------------------------------------------------------------------------------------------
+    // Ultra Thin
+    // --------------------------------------------------------------------------------------------
+    let mut ultra_router = Router::new().route("/ultra", any(omnis_studio_reverse_proxy));
+
+    if state.config.ultra_rate_limit_per_sec > 0 {
+        ultra_router = ultra_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("Ultra-Thin rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(state.config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    state.config.ultra_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+    let ultra_router = ultra_router.with_state(state.clone());
+
+    // --------------------------------------------------------------------------------------------
+    // Javascript Client
+    // --------------------------------------------------------------------------------------------
+    let mut jsclient_router = Router::new()
+        .route("/jschtml/{*key}", any(omnis_studio_reverse_proxy))
+        .route("/jsclient", any(omnis_studio_reverse_proxy))
+        .route("/push", any(omnis_studio_reverse_proxy));
+
+    if state.config.js_client_rate_limit_per_sec > 0 {
+        jsclient_router = jsclient_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("JS Client rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(state.config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    state.config.js_client_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+    let jsclient_router = jsclient_router.with_state(state.clone());
 
     // Upstream routing
     Router::new()
-        .merge(
-            Router::new()
-                .route("/favicon.ico", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/css/{*key}", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/fonts/{*key}", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/icons/{*key}", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/images/{*key}", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/scripts/{*key}", get(omnis_studio_reverse_proxy))
-                .route("/jschtml/themes/{*key}", get(omnis_studio_reverse_proxy))
-                .route_layer(asset_cache)
-                .with_state(state.clone()),
-        )
-        .merge(
-            Router::new()
-                .route("/jschtml/{*key}", any(omnis_studio_reverse_proxy))
-                .route("/jsclient", any(omnis_studio_reverse_proxy))
-                .route("/push", any(omnis_studio_reverse_proxy))
-                .route_layer(jsclient_rate_limit_layer)
-                .with_state(state.clone()),
-        )
-        .merge(
-            Router::new()
-                .route("/ultra", any(omnis_studio_reverse_proxy))
-                .route_layer(ultra_rate_limit_layer)
-                .with_state(state.clone()),
-        )
-        .merge(
-            Router::new()
-                .route("/api/{*key}", any(omnis_studio_reverse_proxy))
-                .route_layer(api_rate_limit_layer)
-                .with_state(state.clone()),
-        )
+        .merge(cache_router)
+        .merge(jsclient_router)
+        .merge(ultra_router)
+        .merge(api_router)
         .fallback(omnis_studio_reverse_proxy)
         .with_state(state.clone())
         .layer(CookieManagerLayer::new())
@@ -350,7 +364,7 @@ fn build_upstream_app(state: &AppState) -> Router {
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    error!("service error: {}", err);
+                    error!("load shed error: {}", err);
                     (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
                 }))
                 .layer(LoadShedLayer::new()),

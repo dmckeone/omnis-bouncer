@@ -136,7 +136,7 @@ impl Scripts {
         time: Option<DateTime<Utc>>,
         validated_expiry: Duration,
         quarantine_expiry: Duration,
-    ) -> Result<usize> {
+    ) -> Result<(bool, usize)> {
         let prefix = prefix.into();
 
         let time = match time {
@@ -144,7 +144,7 @@ impl Scripts {
             None => current_time(conn).await?,
         };
 
-        let position = self
+        let result: [usize; 2] = self
             .id_position
             .arg(prefix)
             .arg(String::from(id))
@@ -154,7 +154,18 @@ impl Scripts {
             .invoke_async(conn)
             .await?;
 
-        Ok(position)
+        let [added, position] = result;
+
+        let added = match added {
+            0 => false,
+            1 => true,
+            _ => {
+                let msg = format!("Unexpected result from \"id_position\": {}", added);
+                return Err(Error::RedisScriptUnreadable(msg));
+            }
+        };
+
+        Ok((added, position))
     }
 
     /// Remove a given UUID from the queue/store

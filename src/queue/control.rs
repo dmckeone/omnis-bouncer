@@ -2,22 +2,20 @@ use chrono::{DateTime, Utc};
 use deadpool_redis::{redis, Connection, Pool as RedisPool};
 use redis::{pipe, AsyncTypedCommands};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{error, info};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
-    QueueEnabled, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
+    QueueEnabled, QueueEvent, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
 use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
     waiting_page_key, Scripts,
 };
-use crate::queue::QueueEvent;
 
 pub struct QueueControl {
     pool: RedisPool,
@@ -26,7 +24,7 @@ pub struct QueueControl {
     scripts: Scripts,
     broadcast: broadcast::Sender<QueueEvent>,
     _receiver: broadcast::Receiver<QueueEvent>,
-    recent_events: RwLock<HashMap<QueueEvent, Instant>>,
+    throttle_buffer: RwLock<HashMap<QueueEvent, Instant>>,
     emit_throttle: Duration,
 }
 
@@ -46,8 +44,8 @@ impl QueueControl {
             scripts: Scripts::new()?,
             broadcast,
             _receiver: receiver, // Keep a single receiver around so the channel doesn't close
-            recent_events: RwLock::new(HashMap::new()),
-            emit_throttle: emit_throttle,
+            throttle_buffer: RwLock::new(HashMap::new()),
+            emit_throttle,
         };
 
         Ok(queue)
@@ -101,26 +99,36 @@ impl QueueControl {
 
     /// Emit an event from this QueueControl, throttled by the emit limit
     pub async fn emit(&self, event: QueueEvent, now: Option<Instant>) {
-        let guard = self.recent_events.read().await;
-        let now = now.unwrap_or(Instant::now());
-        let instant = (*guard).get(&event);
-
-        if let Some(instant) = instant
-            && now.duration_since(*instant) > self.emit_throttle
+        // Check if event needs to be throttled
         {
-            // EARLY EXIT: Event was already emitted recently
-            info!("Throttle: {:?}", event);
+            let guard = self.throttle_buffer.read().await;
+            let now = now.unwrap_or(Instant::now());
+            let instant = (*guard).get(&event);
+
+            if let Some(instant) = instant
+                && now.duration_since(*instant) < self.emit_throttle
+            {
+                // EARLY EXIT: Event was already emitted recently
+                return;
+            }
+        }
+
+        // Otherwise emit event and insert the event into the event throttle buffer
+        if let Err(error) = self.broadcast.send(event.clone()) {
+            // EARLY EXIT: Failed to emit the event
+            error!("Failed to send queue event - \"{:?}\": {}", event, error);
             return;
         }
 
-        if let Err(error) = self.broadcast.send(event.clone()) {
-            error!("Failed to send queue event - \"{:?}\": {}", event, error);
-        }
+        // Write successful event to the event throttle buffer
+        let now = now.unwrap_or(Instant::now());
+        let mut guard = self.throttle_buffer.write().await;
+        (*guard).insert(event, now);
     }
 
     /// Flush the event throttle buffer of any stale events
     pub async fn flush_event_throttle_buffer(&self, now: Option<Instant>) {
-        let mut guard = self.recent_events.write().await;
+        let mut guard = self.throttle_buffer.write().await;
         let now = now.unwrap_or(Instant::now());
         (*guard).retain(|_, instant| now.duration_since(*instant) < self.emit_throttle);
     }
@@ -342,24 +350,6 @@ impl QueueControl {
         self.scripts.has_ids(&mut conn, prefix).await
     }
 
-    pub async fn id_add(
-        &self,
-        prefix: impl Into<String>,
-        id: Uuid,
-        time: Option<DateTime<Utc>>,
-    ) -> Result<QueuePosition> {
-        let position = self.id_position(prefix.into(), id, time).await?;
-
-        let event = match position {
-            QueuePosition::Queue(_) => QueueEvent::QueueAdded,
-            QueuePosition::Store => QueueEvent::StoreAdded,
-        };
-
-        self.emit(event, None).await;
-
-        Ok(position)
-    }
-
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
     pub async fn id_position(
@@ -370,7 +360,7 @@ impl QueueControl {
     ) -> Result<QueuePosition> {
         let mut conn = self.conn().await?;
 
-        let result = self
+        let (added, position) = self
             .scripts
             .id_position(
                 &mut conn,
@@ -382,7 +372,16 @@ impl QueueControl {
             )
             .await?;
 
-        Ok(result.into())
+        let position: QueuePosition = position.into();
+        if added {
+            let event = match position {
+                QueuePosition::Store => QueueEvent::StoreAdded,
+                QueuePosition::Queue(_) => QueueEvent::QueueAdded,
+            };
+            self.emit(event, None).await;
+        }
+
+        Ok(position)
     }
 
     /// Remove a given UUID from the queue/store

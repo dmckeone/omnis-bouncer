@@ -10,20 +10,30 @@
 -- ARGV[3]: time - INTEGER
 -- ARGV[4]: validated_expiry - INTEGER
 -- ARGV[5]: quarantine_expiry - INTEGER
+--
+-- RETURN: 2-Tuple of {added - INTEGER, position - INTEGER}
 -----------------------------------------------------------------------------------------------------------------------
 
 -- Check if uuid_id is in the store
 local in_set = redis.call('SISMEMBER', ARGV[1] .. ':store_ids', ARGV[2])
 if in_set == 1 then
     redis.call('HSET', ARGV[1] .. ':store_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
-    return 0
+
+    local result = {}
+    result[1] = 0
+    result[2] = 0
+    return result
 end
 
 -- Check if uuid_id is in the queue
 local queue_position = redis.call('HGET', ARGV[1] .. ':queue_position_cache', ARGV[2])
 if queue_position then
     redis.call('HSET', ARGV[1] .. ':queue_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
-    return queue_position
+
+    local result = {}
+    result[1] = 0
+    result[2] = queue_position
+    return result
 end
 
 -- DEV NOTE: All the code below handles adding new tokens to the queue, including quarantine -> validated upgrade
@@ -37,10 +47,15 @@ else
     max_size = tonumber(max_size)
 end
 
+-- Infinite store, so add to the store
 if max_size < 0 then
     redis.call('SADD', ARGV[1] .. ':store_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':store_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
-    return 0
+
+    local result = {}
+    result[1] = 1
+    result[2] = 0
+    return result
 end
 
 -- Check if the queue is larger than 0 (if so we should add the token to the queue)
@@ -49,7 +64,11 @@ if queue_size ~= nil and queue_size > 0 then
     local pos = redis.call('RPUSH', ARGV[1] .. ':queue_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':queue_position_cache', ARGV[2], pos)
     redis.call('HSET', ARGV[1] .. ':queue_expiry_secs', ARGV[2], ARGV[3] + ARGV[5]) -- quarantine expiry
-    return pos
+
+    local result = {}
+    result[1] = 1
+    result[2] = pos
+    return result
 end
 
 -- Check the number of store tokens and see if there is room to add the new token into the store (queue was 0 and
@@ -59,11 +78,19 @@ if current_size ~= nil and current_size < max_size then
     -- The store has room, add the ID to the store
     redis.call('SADD', ARGV[1] .. ':store_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':store_expiry_secs', ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
-    return 0
+
+    local result = {}
+    result[1] = 1
+    result[2] = 0
+    return result
 else
     -- The store did not have room, add the ID to the queue
     local pos = redis.call('RPUSH', ARGV[1] .. ':queue_ids', ARGV[2])
     redis.call('HSET', ARGV[1] .. ':queue_position_cache', ARGV[2], pos)
     redis.call('HSET', ARGV[1] .. ':queue_expiry_secs', ARGV[2], ARGV[3] + ARGV[5]) -- quarantine expiry
-    return pos
+
+    local result = {}
+    result[1] = 1
+    result[2] = pos
+    return result
 end
