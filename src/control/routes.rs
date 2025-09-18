@@ -4,14 +4,21 @@ use axum::response::{IntoResponse, Response};
 use axum::{routing::get, Json, Router};
 use futures_util::stream::Stream;
 use http::header::CONTENT_TYPE;
-use http::{HeaderValue, Method, StatusCode};
+use http::{HeaderValue, StatusCode};
 use std::convert::Infallible;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
-use tower_http::cors::{Any, CorsLayer};
+
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::error;
+
+#[cfg(debug_assertions)]
+use crate::constants::LOCALHOST_CORS_DEBUG_URI;
+#[cfg(debug_assertions)]
+use http::Method;
+#[cfg(debug_assertions)]
+use tower_http::cors::CorsLayer;
 
 use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
 use crate::control::models::{Event, Settings, SettingsPatch, Status};
@@ -22,12 +29,6 @@ use crate::state::AppState;
 use crate::stream::debounce;
 
 pub fn router<T>(state: AppState) -> Router<T> {
-    let cors_layer = CorsLayer::new()
-        // allow `GET` and `POST` when accessing the resource
-        .allow_methods([Method::GET, Method::PATCH])
-        // allow requests from any origin
-        .allow_origin(Any);
-
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
@@ -39,7 +40,8 @@ pub fn router<T>(state: AppState) -> Router<T> {
     let asset_service = ServeDir::new(&UI_ASSET_DIR);
 
     // Reverse proxy app
-    Router::new()
+    #[allow(unused_mut)]
+    let mut router = Router::new()
         .route("/health", get(read_health))
         .route("/api/settings", get(read_settings).patch(patch_settings))
         .route("/api/status", get(read_status))
@@ -47,9 +49,21 @@ pub fn router<T>(state: AppState) -> Router<T> {
         .nest_service("/favicon.ico", favicon_service)
         .nest_service("/static", static_service)
         .nest_service("/assets", asset_service)
-        .fallback(control_ui_handler)
-        .layer(cors_layer)
-        .with_state(state.clone())
+        .fallback(control_ui_handler);
+
+    #[cfg(debug_assertions)]
+    {
+        let origins = [LOCALHOST_CORS_DEBUG_URI.parse().unwrap()];
+        let cors_layer = CorsLayer::new()
+            // allow `GET` and `POST` when accessing the resource
+            .allow_methods([Method::GET, Method::PATCH])
+            // allow requests from any origin
+            .allow_origin(origins);
+
+        router = router.layer(cors_layer);
+    }
+
+    router.with_state(state.clone())
 }
 
 async fn read_health() -> impl IntoResponse {

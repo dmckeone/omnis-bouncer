@@ -1,6 +1,8 @@
 import {defineStore} from 'pinia'
 import {ref} from "vue";
 
+import {API_URI} from '@/constants';
+
 interface QueueStatus {
     queue_enabled: boolean,
     store_capacity: number,
@@ -17,14 +19,24 @@ export const useQueueStatus = defineStore('queue', () => {
         store_size: 0,
     })
 
+    let fetching = false;
     const fetchStatus = async () => {
-        const response = await fetch('/api/status')
-        status.value = await response.json()
+        if (fetching) {
+            return;
+        }
+        fetching = true;
+        try {
+            const response = await fetch(API_URI + '/api/status')
+            status.value = await response.json()
+        } finally {
+            fetching = false;
+        }
     }
     fetchStatus();
 
-    const eventSource = new EventSource("/api/sse");
-    eventSource.onmessage = function (event) {
+    const eventSource = new EventSource(API_URI + "https://127.0.0.1:2999/api/sse");
+    eventSource.onmessage = function (event: MessageEvent) {
+        console.log("Event: ", event);
         fetchStatus();
     }
 

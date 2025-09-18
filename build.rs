@@ -5,7 +5,7 @@ use npm_rs::{NodeEnv, NpmEnv};
 fn main() {
     let _exit_status = NpmEnv::default()
         .with_node_env(&NodeEnv::from_cargo_profile().unwrap_or_default())
-        // .with_env("FOO", "bar")
+        .with_env("VITE_API_URI", "") // Ensure that all API requests got to the root to avoid CORS errors
         .set_path("ui")
         .init_env()
         .install(None)
