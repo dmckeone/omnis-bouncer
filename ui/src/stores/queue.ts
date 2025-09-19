@@ -31,7 +31,7 @@ export const useQueueStatus = defineStore('queue', () => {
 
     const fetchInfo = async () => {
         try {
-            const response = await fetch(API_URI + '/api/info')
+            const response = await fetch(API_URI + 'api/info')
             info.value = await response.json()
         } finally {
         }
@@ -45,7 +45,7 @@ export const useQueueStatus = defineStore('queue', () => {
         }
         fetchingStatus = true;
         try {
-            const response = await fetch(API_URI + '/api/status')
+            const response = await fetch(API_URI + 'api/status')
             status.value = await response.json()
         } finally {
             fetchingStatus = false;
@@ -53,7 +53,7 @@ export const useQueueStatus = defineStore('queue', () => {
     }
     fetchStatus();
 
-    const eventSource = new EventSource(API_URI + "/api/sse");
+    const eventSource = new EventSource(API_URI + "api/sse");
     eventSource.onmessage = function (messageEvent: MessageEvent) {
         const event = messageEvent.data;
         const is_interesting = INTERESTING_EVENTS_RE.test(event);
