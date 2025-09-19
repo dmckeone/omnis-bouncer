@@ -3,7 +3,8 @@
 </script>
 
 <template>
-  <div class="stats shadow">
+  <div
+      class="stats shadow stats-vertical md:stats-horizontal">
     <slot></slot>
   </div>
 </template>

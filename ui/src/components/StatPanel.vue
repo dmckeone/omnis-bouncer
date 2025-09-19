@@ -1,11 +1,14 @@
 <script setup lang="ts">
+import type {ComputedRef} from "vue";
+
 const slots = defineSlots<{
-  figure?: () => any
+  figure?: () => string,
+  actions?: () => string
 }>()
 const props = withDefaults(
     defineProps<{
       title?: string
-      value?: boolean | number
+      value?: boolean | number | string | ComputedRef<boolean | number | string>
     }>(),
     {
       title: "Stat",
@@ -21,6 +24,9 @@ const props = withDefaults(
     </div>
     <div class="stat-title text-bold">{{ props.title }}</div>
     <div class="stat-value" v-bind="$attrs">{{ props.value }}</div>
+    <div class="stat-actions">
+      <slot name="actions"/>
+    </div>
   </div>
 </template>
 

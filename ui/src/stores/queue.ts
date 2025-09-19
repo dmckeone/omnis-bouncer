@@ -57,7 +57,6 @@ export const useQueueStatus = defineStore('queue', () => {
     eventSource.onmessage = function (messageEvent: MessageEvent) {
         const event = messageEvent.data;
         const is_interesting = INTERESTING_EVENTS_RE.test(event);
-        console.log(event, is_interesting)
         if (is_interesting) {
             fetchStatus();
         }

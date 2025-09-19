@@ -1,21 +1,27 @@
 <script setup lang="ts">
 import {storeToRefs} from "pinia";
 import {useQueueStatus} from "@/stores/queue.ts";
-import Stats from "@/components/Stats.vue";
+import StatGroup from "@/components/StatGroup.vue";
 import StatPanel from "@/components/StatPanel.vue";
 import {POWER_ICON, STORE_ICON, SWITCH_ICON, WAITING_ROOM_ICON} from "@/icons.ts";
+import {computed} from "vue";
 
 const store = useQueueStatus();
 const {info, status} = storeToRefs(store);
+const enabled_description = computed(() => status.value.queue_enabled ? 'On' : 'Off');
 </script>
 
 <template>
   <div class="min-h-screen">
-    <div class="p-10 max-w-md">
-      <h1 class="text-5xl font-bold pb-10 text-primary">{{ info.name }}</h1>
-      <Stats>
+    <div class="navbar bg-base-100 shadow-sm">
+      <div class="flex-1">
+        <a class="btn btn-ghost text-xl">{{ info.name }}</a>
+      </div>
+    </div>
+    <div class="flex fixed w-screen">
+      <StatGroup class="flex-auto m-5 max-w-3xl">
         <StatPanel title="Queue Enabled"
-                   :value="status.queue_enabled"
+                   :value="enabled_description"
                    :class="{ 'text-success': status.queue_enabled, 'text-error': !status.queue_enabled }"
         >
           <template #figure>
@@ -47,8 +53,9 @@ const {info, status} = storeToRefs(store);
             <div v-html="WAITING_ROOM_ICON"/>
           </template>
         </StatPanel>
-      </Stats>
+      </StatGroup>
     </div>
+    <div class="w-5"></div>
   </div>
 </template>
 
