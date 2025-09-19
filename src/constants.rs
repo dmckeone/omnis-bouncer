@@ -7,6 +7,10 @@ pub static REDIS_FUNCTIONS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR
 // Static directory assets
 pub static STATIC_ASSETS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/static");
 
+// HTML Template directory
+pub static HTML_TEMPLATE_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/html");
+pub static DEFAULT_WAITING_ROOM_PAGE: &'static str = "default_waiting_room.html";
+
 // Control Web UI
 pub static UI_INDEX: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/dist/index.html"));

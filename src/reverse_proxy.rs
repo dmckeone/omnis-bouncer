@@ -1,5 +1,10 @@
+use crate::constants::{DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
+use crate::errors::Result;
+use crate::queue::{QueueControl, QueuePosition};
+use crate::state::{AppState, Config};
+use crate::upstream::{ConnectionPermit, UpstreamPool};
 use axum::extract::{OriginalUri, Request, State};
-use axum::response::IntoResponse;
+use axum::response::{Html, IntoResponse};
 use http::header::{
     ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
@@ -17,11 +22,6 @@ use tower_cookies::cookie::{Expiration, SameSite};
 use tower_cookies::{Cookie, Cookies, PrivateCookies};
 use tracing::{error, info};
 use uuid::Uuid;
-
-use crate::errors::Result;
-use crate::queue::{QueueControl, QueuePosition};
-use crate::state::{AppState, Config};
-use crate::upstream::{ConnectionPermit, UpstreamPool};
 
 lazy_static! {
     static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
@@ -65,6 +65,11 @@ lazy_static! {
     static ref HTML_RE: Regex = RegexBuilder::new(r"\.(htm|html)$")
         .case_insensitive(true)
         .build()
+        .unwrap();
+    static ref DefaultWaitingPage: &'static str = HTML_TEMPLATE_DIR
+        .get_file(DEFAULT_WAITING_ROOM_PAGE)
+        .unwrap()
+        .contents_utf8()
         .unwrap();
 }
 
@@ -214,26 +219,23 @@ async fn check_waiting_page(
     let size_string = status.queue_size.to_string();
 
     // Fetch waiting page
-    let waiting_page = queue
-        .waiting_page(queue_prefix.clone())
-        .await?
-        .unwrap_or(format!(
-            "Waiting Page - {} of {}",
-            position_string, size_string
-        ));
+    let mut waiting_headers = HeaderMap::new();
+    waiting_headers.insert(CONTENT_TYPE, "text/html".parse()?);
 
-    let waiting_headers = {
-        let mut waiting_headers = HeaderMap::new();
-        waiting_headers.insert(
-            HeaderName::from_lowercase(config.position_http_header.as_bytes())?,
-            position_string.parse()?,
-        );
-        waiting_headers.insert(
-            HeaderName::from_lowercase(config.queue_size_http_header.as_bytes())?,
-            size_string.parse()?,
-        );
-        waiting_headers
+    let waiting_page_body: axum::body::Body = match queue.waiting_page(queue_prefix.clone()).await?
+    {
+        Some(waiting_page) => waiting_page.into(),
+        None => (*DefaultWaitingPage).into(),
     };
+
+    waiting_headers.insert(
+        HeaderName::from_lowercase(config.position_http_header.as_bytes())?,
+        position_string.parse()?,
+    );
+    waiting_headers.insert(
+        HeaderName::from_lowercase(config.queue_size_http_header.as_bytes())?,
+        size_string.parse()?,
+    );
 
     add_browser_cookie(
         cookies,
@@ -242,10 +244,7 @@ async fn check_waiting_page(
     );
     add_browser_cookie(cookies, config.queue_size_cookie_name.clone(), size_string);
 
-    Ok(Some((
-        waiting_headers,
-        axum::body::Body::from(waiting_page),
-    )))
+    Ok(Some((waiting_headers, waiting_page_body)))
 }
 
 enum CookieStatus {

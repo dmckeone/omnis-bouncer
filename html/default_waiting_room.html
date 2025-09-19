@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="refresh" content="17">
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Omnis Bouncer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"/>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <style type="text/tailwindcss">
+        @import url("https://fonts.googleapis.com/css2?family=Karla:wght@300;700&family=Raleway:wght@400;700&display=swap");
+        @import "tailwindcss";
+
+        @theme {
+            --font-display: "Karla", sans-serif;
+        }
+    </style>
+</head>
+<body class="font-display">
+<div class="hero bg-base-200 min-h-screen">
+    <div class="hero-content text-center bg-white rounded-lg shadow">
+        <div class="md:min-w-md max-w-lg">
+            <h1 class="text-2xl md:text-5xl font-bold">Hang on tight!</h1>
+            <p class="text-md md:text-lg px-2 md:px-5 py-2 md:py-5">
+                You are <b class="queue-position"></b> in queue!
+            </p>
+            <div class="px-2 md:px-5">
+                <progress class="queue-progress progress progress-primary h-3 md:h-5" value="0" max="100"></progress>
+                <p class="text-sm md:text-md">This page will automatically refresh in <b id="retry-timeout">15</b>
+                    seconds</p>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+<script type="text/javascript">
+    function nth(n) {
+        return ["st", "nd", "rd"][((n + 90) % 100 - 10) % 10 - 1] || "th"
+    }
+
+    function getCookie(name) {
+        return document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')?.pop() || '';
+    }
+
+    let queue_size = getCookie("omnis-bouncer-queue-size");
+    let queue_position = getCookie("omnis-bouncer-queue-position");
+
+    queue_size = parseInt(queue_size);
+    queue_position = parseInt(queue_position);
+
+    if (!Number.isNaN(queue_size) && !Number.isNaN(queue_position)) {
+        document.querySelectorAll(".queue-progress").forEach(function (element) {
+            element.value = queue_size - queue_position;  // Progress advances right to left where 0 is back-of-the-line
+            element.max = queue_size;
+        })
+
+        if (queue_position) {
+            document.querySelectorAll(".queue-position").forEach(function (element) {
+                element.innerText = `${queue_position}${nth(parseInt(queue_position))}`;
+            })
+        }
+    }
+
+    let countdown = 15;
+    let reload_timer = setInterval(function () {
+        countdown--;
+        document.getElementById("retry-timeout").innerText = `${countdown}`;
+
+        if (countdown === 0) {
+            clearInterval(reload_timer);
+            location.reload();
+        }
+    }, 1000);
+
+</script>
+</html>
