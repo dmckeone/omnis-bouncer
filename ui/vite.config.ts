@@ -16,4 +16,12 @@ export default defineConfig({
             '@': fileURLToPath(new URL('./src', import.meta.url))
         },
     },
+    test: {
+        include: [
+            "./tests/**.spec.ts"
+        ],
+        setupFiles: [
+            "./tests/setup.ts"
+        ]
+    },
 })

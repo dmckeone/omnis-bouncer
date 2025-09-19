@@ -29,24 +29,50 @@ export const useQueueStatus = defineStore('queue', () => {
         store_size: 0,
     })
 
+    let fetchingInfo = false;
     const fetchInfo = async () => {
+        if (!API_URI) {
+            return;
+        }
+        if (fetchingInfo) {
+            return
+        }
+
+        const uri = API_URI + 'api/info';
+        fetchingInfo = true;
         try {
-            const response = await fetch(API_URI + 'api/info')
-            info.value = await response.json()
+            const response = await fetch(uri)
+            if (response.status == 200) {
+                info.value = await response.json()
+            }
+        } catch (e) {
+            console.log(`Error querying ${uri}: ${e}`)
         } finally {
+            fetchingInfo = false
         }
     }
     fetchInfo();
 
     let fetchingStatus = false;
     const fetchStatus = async () => {
+        if (!API_URI) {
+            return;
+        }
         if (fetchingStatus) {
             return;
         }
+
+        const uri = API_URI + 'api/status';
+
         fetchingStatus = true;
         try {
-            const response = await fetch(API_URI + 'api/status')
-            status.value = await response.json()
+
+            const response = await fetch(uri)
+            if (response.status == 200) {
+                status.value = await response.json()
+            }
+        } catch (e) {
+            console.log(`Error querying ${uri}: ${e}`)
         } finally {
             fetchingStatus = false;
         }
