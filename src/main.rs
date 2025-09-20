@@ -134,7 +134,7 @@ async fn main() {
     };
 
     // Create Redis Pool
-    let redis = match create_redis_pool("redis://127.0.0.1") {
+    let redis = match create_redis_pool("redis://127.0.0.1/?protocol=resp3") {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to connect to redis: {:?}", e);
