@@ -6,14 +6,10 @@
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Omnis Bouncer</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Karla:wght@300;700&display=swap" crossorigin>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css"/>
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <style type="text/tailwindcss">
-        @import url("https://fonts.googleapis.com/css2?family=Karla:wght@300;700&display=swap");
-        @import "tailwindcss";
-
         @theme {
             --font-display: "Karla", sans-serif;
         }
@@ -35,45 +31,47 @@
         </div>
     </div>
 </div>
-</body>
 <script type="text/javascript">
-    function nth(n) {
-        return ["st", "nd", "rd"][((n + 90) % 100 - 10) % 10 - 1] || "th"
-    }
+    "use strict";
+    (() => {
+        function nth(n) {
+            return ["st", "nd", "rd"][((n + 90) % 100 - 10) % 10 - 1] || "th"
+        }
 
-    function getCookie(name) {
-        return document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')?.pop() || '';
-    }
+        function getCookie(name) {
+            return document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)')?.pop() || '';
+        }
 
-    let queue_size = getCookie("omnis-bouncer-queue-size");
-    let queue_position = getCookie("omnis-bouncer-queue-position");
+        let queue_size = getCookie("omnis-bouncer-queue-size");
+        let queue_position = getCookie("omnis-bouncer-queue-position");
 
-    queue_size = parseInt(queue_size);
-    queue_position = parseInt(queue_position);
+        queue_size = parseInt(queue_size);
+        queue_position = parseInt(queue_position);
 
-    if (!Number.isNaN(queue_size) && !Number.isNaN(queue_position)) {
-        document.querySelectorAll(".queue-progress").forEach(function (element) {
-            element.value = queue_size - queue_position;  // Progress advances right to left where 0 is back-of-the-line
-            element.max = queue_size;
-        })
-
-        if (queue_position) {
-            document.querySelectorAll(".queue-position").forEach(function (element) {
-                element.innerText = `${queue_position}${nth(parseInt(queue_position))}`;
+        if (!Number.isNaN(queue_size) && !Number.isNaN(queue_position)) {
+            document.querySelectorAll(".queue-progress").forEach(function (element) {
+                element.value = queue_size - queue_position;  // Progress advances right to left where 0 is back-of-the-line
+                element.max = queue_size;
             })
+
+            if (queue_position) {
+                document.querySelectorAll(".queue-position").forEach(function (element) {
+                    element.innerText = `${queue_position}${nth(parseInt(queue_position))}`;
+                })
+            }
         }
-    }
 
-    let countdown = 15;
-    let reload_timer = setInterval(function () {
-        countdown--;
-        document.getElementById("retry-timeout").innerText = `${countdown}`;
+        let countdown = 15;
+        let reload_timer = setInterval(function () {
+            countdown--;
+            document.getElementById("retry-timeout").innerText = `${countdown}`;
 
-        if (countdown === 0) {
-            clearInterval(reload_timer);
-            location.reload();
-        }
-    }, 1000);
-
+            if (countdown === 0) {
+                clearInterval(reload_timer);
+                location.reload();
+            }
+        }, 1000);
+    })();
 </script>
+</body>
 </html>

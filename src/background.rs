@@ -38,6 +38,12 @@ async fn web_tasks(state: AppState) {
 
 /// Queue
 async fn queue_tasks(state: AppState) {
+    // Verify waiting page
+    state
+        .queue
+        .verify_waiting_page(state.config.queue_prefix.clone())
+        .await;
+
     // Flush all emit buffer entries
     state.queue.flush_event_throttle_buffer(None).await;
 

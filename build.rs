@@ -3,7 +3,7 @@
 use npm_rs::{NodeEnv, NpmEnv};
 
 // All queries in the release package go to the server they came from
-static API_URI: &'static str = "/";
+static API_URI: &str = "/";
 
 fn main() {
     let _exit_status = NpmEnv::default()

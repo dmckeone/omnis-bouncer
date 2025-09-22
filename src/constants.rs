@@ -9,7 +9,7 @@ pub static STATIC_ASSETS_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/s
 
 // HTML Template directory
 pub static HTML_TEMPLATE_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/html");
-pub static DEFAULT_WAITING_ROOM_PAGE: &'static str = "default_waiting_room.html";
+pub static DEFAULT_WAITING_ROOM_PAGE: &str = "default_waiting_room.html";
 
 // Control Web UI
 pub static UI_INDEX: &[u8] =
@@ -38,4 +38,4 @@ pub static SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 
 // Web Server Debug
 #[cfg(debug_assertions)]
-pub static LOCALHOST_CORS_DEBUG_URI: &'static str = "http://localhost:5173";
+pub static LOCALHOST_CORS_DEBUG_URI: &str = "http://localhost:5173";

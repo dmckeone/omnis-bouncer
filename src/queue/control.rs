@@ -1,12 +1,4 @@
-use chrono::{DateTime, Utc};
-use deadpool_redis::{redis, Connection, Pool as RedisPool};
-use redis::{pipe, AsyncTypedCommands};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, RwLock};
-use tracing::error;
-use uuid::Uuid;
-
+use crate::constants::{DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
@@ -16,6 +8,34 @@ use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
     waiting_page_key, Scripts,
 };
+use chrono::{DateTime, Utc};
+use deadpool_redis::{redis, Connection, Pool as RedisPool};
+use lazy_static::lazy_static;
+use minify_html_onepass::{copy as minify, Cfg};
+use redis::{pipe, AsyncTypedCommands};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+use tokio::sync::{broadcast, RwLock};
+use tracing::error;
+use uuid::Uuid;
+
+lazy_static! {
+    static ref minfiy_cfg: Cfg = Cfg {
+        minify_js: true,
+        minify_css: true,
+    };
+    static ref DefaultWaitingPage: String = String::from_utf8(
+        minify(
+            HTML_TEMPLATE_DIR
+                .get_file(DEFAULT_WAITING_ROOM_PAGE)
+                .expect("Failed to read default waiting room from app")
+                .contents(),
+            &minfiy_cfg
+        )
+        .expect("Failed to minify default waiting page")
+    )
+    .expect("Failed to convert default waiting page to string");
+}
 
 pub struct QueueControl {
     pool: RedisPool,
@@ -26,6 +46,7 @@ pub struct QueueControl {
     _receiver: broadcast::Receiver<QueueEvent>,
     throttle_buffer: RwLock<HashMap<QueueEvent, Instant>>,
     emit_throttle: Duration,
+    waiting_page_cache: RwLock<HashMap<String, String>>,
 }
 
 impl QueueControl {
@@ -46,6 +67,7 @@ impl QueueControl {
             _receiver: receiver, // Keep a single receiver around so the channel doesn't close
             throttle_buffer: RwLock::new(HashMap::new()),
             emit_throttle,
+            waiting_page_cache: RwLock::new(HashMap::new()),
         };
 
         Ok(queue)
@@ -57,9 +79,12 @@ impl QueueControl {
         enabled: bool,
         store_capacity: StoreCapacity,
     ) -> Result<()> {
+        let prefix = prefix.into();
+
         let mut conn = self.conn().await?;
         self.scripts.init(&mut conn).await?;
-        self.verify_keys(prefix, enabled, store_capacity).await?;
+        self.verify_keys(&prefix, enabled, store_capacity).await?;
+        self.verify_waiting_page(&prefix).await;
         Ok(())
     }
 
@@ -336,6 +361,59 @@ impl QueueControl {
         self.emit(QueueEvent::WaitingPageChanged, None).await;
 
         Ok(())
+    }
+
+    pub async fn cached_waiting_page(&self, prefix: impl Into<String>) -> String {
+        let prefix = prefix.into();
+        let guard = self.waiting_page_cache.read().await;
+
+        match (*guard).get(&prefix) {
+            Some(waiting_page) => waiting_page.clone(),
+            None => (*DefaultWaitingPage).clone(),
+        }
+    }
+
+    pub async fn verify_waiting_page(&self, prefix: impl Into<String>) {
+        let prefix = prefix.into();
+
+        let cached = {
+            let guard = self.waiting_page_cache.read().await;
+            (*guard).get(&prefix).cloned()
+        };
+
+        let current = match self.waiting_page(&prefix).await {
+            Ok(Some(waiting_page)) => match minify(waiting_page.as_bytes(), &minfiy_cfg) {
+                Ok(bytes) => match String::from_utf8(bytes) {
+                    Ok(minified) => Some(minified),
+                    Err(error) => {
+                        error!("Failed convert minified waiting page to Redis: {:?}", error);
+                        None
+                    }
+                },
+                Err(error) => {
+                    error!("Failed to minify waiting page in Redis: {:?}", error);
+                    None
+                }
+            },
+            Ok(None) => None,
+            Err(error) => {
+                error!(
+                    "Failed to load waiting page while verifying cache: {:?}",
+                    error
+                );
+                None
+            }
+        };
+
+        if cached == current {
+            // EARLY EXIT: Cached is valid
+        }
+
+        let mut guard = self.waiting_page_cache.write().await;
+        match current {
+            Some(waiting_page) => (*guard).insert(prefix.clone(), waiting_page),
+            None => (*guard).remove(&prefix),
+        };
     }
 
     /// Check that all keys required for syncing the queue/store are available

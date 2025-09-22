@@ -1,10 +1,9 @@
-use crate::constants::{DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
 use crate::errors::Result;
 use crate::queue::{QueueControl, QueuePosition};
 use crate::state::{AppState, Config};
 use crate::upstream::{ConnectionPermit, UpstreamPool};
 use axum::extract::{OriginalUri, Request, State};
-use axum::response::{Html, IntoResponse};
+use axum::response::IntoResponse;
 use http::header::{
     ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
@@ -65,11 +64,6 @@ lazy_static! {
     static ref HTML_RE: Regex = RegexBuilder::new(r"\.(htm|html)$")
         .case_insensitive(true)
         .build()
-        .unwrap();
-    static ref DefaultWaitingPage: &'static str = HTML_TEMPLATE_DIR
-        .get_file(DEFAULT_WAITING_ROOM_PAGE)
-        .unwrap()
-        .contents_utf8()
         .unwrap();
 }
 
@@ -222,11 +216,8 @@ async fn check_waiting_page(
     let mut waiting_headers = HeaderMap::new();
     waiting_headers.insert(CONTENT_TYPE, "text/html".parse()?);
 
-    let waiting_page_body: axum::body::Body = match queue.waiting_page(queue_prefix.clone()).await?
-    {
-        Some(waiting_page) => waiting_page.into(),
-        None => (*DefaultWaitingPage).into(),
-    };
+    let waiting_page_body: axum::body::Body =
+        queue.cached_waiting_page(queue_prefix.clone()).await.into();
 
     waiting_headers.insert(
         HeaderName::from_lowercase(config.position_http_header.as_bytes())?,

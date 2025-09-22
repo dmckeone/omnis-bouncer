@@ -221,8 +221,8 @@ impl Scripts {
         type Result = (Option<usize>, Option<usize>, Option<usize>);
         let result: Result = pipe()
             .atomic()
-            .invoke_script(&self.store_timeout.arg(&prefix).arg(time.timestamp()))
-            .invoke_script(&self.queue_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
+            .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
             .invoke_script(&self.store_promote.arg(&prefix))
             .query_async(conn)
             .await?;

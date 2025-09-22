@@ -19,6 +19,7 @@ http-types = "2.12"
 futures-util = "0.3"
 include_dir = "0.7"
 lazy_static = "1.5"
+minify-html-onepass = "0.16"
 redis = { version = "0.32", features = ["tokio-rustls-comp"] }
 regex = "1.11"
 reqwest = { version = "0.12", features = ["stream", "rustls-tls"] }
