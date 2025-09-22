@@ -405,15 +405,14 @@ impl QueueControl {
             }
         };
 
-        if cached == current {
-            // EARLY EXIT: Cached is valid
+        if cached != current {
+            // Cache invalid, get write lock update to latest version
+            let mut guard = self.waiting_page_cache.write().await;
+            match current {
+                Some(waiting_page) => (*guard).insert(prefix.clone(), waiting_page),
+                None => (*guard).remove(&prefix),
+            };
         }
-
-        let mut guard = self.waiting_page_cache.write().await;
-        match current {
-            Some(waiting_page) => (*guard).insert(prefix.clone(), waiting_page),
-            None => (*guard).remove(&prefix),
-        };
     }
 
     /// Check that all keys required for syncing the queue/store are available
