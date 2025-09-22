@@ -82,10 +82,9 @@ impl QueueSubscriber {
         Some(event)
     }
 
-    /// Create a typed stream from the queue subscriber
-    // TODO: Figure out how to make this work with &self and lifetimes
-    pub fn typed_stream(subscriber: QueueSubscriber) -> impl Stream<Item = QueueEvent> {
-        let broadcast_stream = subscriber.redis_subscriber.stream();
+    /// Convert the subscriber into a stream
+    pub fn into_stream(self) -> impl Stream<Item = QueueEvent> {
+        let broadcast_stream = self.redis_subscriber.stream();
         let queue_event_stream = broadcast_stream.filter_map(Self::stream_filter);
 
         // Deduplicate events across a period of time

@@ -18,7 +18,7 @@ use tower_serve_static::{File, ServeDir, ServeFile};
 use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
 use crate::control::models::{Event, Info, Settings, SettingsPatch, Status};
 use crate::errors::Result;
-use crate::queue::{QueueEvent, QueueSubscriber, StoreCapacity};
+use crate::queue::StoreCapacity;
 use crate::signals::cancellable;
 use crate::state::AppState;
 
@@ -151,27 +151,20 @@ async fn read_status(State(state): State<AppState>) -> Result<impl IntoResponse>
     Ok(Json(Status::from(queue_status)))
 }
 
-/// Translate an incoming queue event into a standard format for events as strings
-fn translate_queue_event(
-    queue_event: QueueEvent,
-) -> Option<core::result::Result<SSEvent, Infallible>> {
-    let event: Event = queue_event.into();
-    let event_string: String = event.into();
-    let sse = SSEvent::default().data(event_string);
-    Some(Ok(sse))
-}
-
 /// Stream of events occurring in the server
 async fn server_sent_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = core::result::Result<SSEvent, Infallible>>> {
     let state = state.clone();
 
-    // Create Broadcast stream that is infallible
-    let stream = QueueSubscriber::typed_stream(state.queue_subscriber.clone());
+    // Create stream of Queue events
+    let subscriber = state.queue_subscriber.clone();
+    let stream = subscriber.into_stream();
 
-    // Translate into a public facing API
-    let sse_stream = stream.filter_map(translate_queue_event);
+    // Translate into a public facing API and create Serve Sent Event
+    let sse_stream = stream
+        .map(|ev| String::from(Event::from(ev)))
+        .map(|ev| Ok(SSEvent::default().data(ev)));
 
     // Ensure that the stream doesn't prevent the server from shutting down
     let safe_stream = cancellable(sse_stream, state.shutdown_notifier.clone());
