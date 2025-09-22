@@ -7,7 +7,11 @@
 -- ARGV[2]: current_time - INTEGER
 -----------------------------------------------------------------------------------------------------------------------
 
-local queue_size = redis.call('LLEN', ARGV[1] .. ':queue_ids')
+local queue_ids_key = ARGV[1] .. ':queue_ids'
+local queue_expiry_secs_key = ARGV[1] .. ':queue_expiry_secs'
+local queue_position_cache_key = ARGV[1] .. ':queue_position_cache'
+
+local queue_size = redis.call('LLEN', queue_ids_key)
 if queue_size == nil then
    queue_size = 0
 else
@@ -19,16 +23,16 @@ end
 local position_modifier = 0
 local removed = 0
 for i=0, queue_size do
-    local uuid_id = redis.call('LINDEX', ARGV[1] .. ':queue_ids', i + position_modifier)
-    local expiry = redis.call('HGET', ARGV[1] .. ':queue_expiry_secs', uuid_id)
+    local uuid_id = redis.call('LINDEX', queue_ids_key, i + position_modifier)
+    local expiry = redis.call('HGET', queue_expiry_secs_key, uuid_id)
     if expiry ~= nil and expiry < ARGV[2] then
-        redis.call('HDEL', ARGV[1] .. ':queue_expiry_secs', uuid_id)
-        redis.call('HDEL', ARGV[1] .. ':queue_position_cache', uuid_id)
-        redis.call('LREM', ARGV[1] .. ':queue_ids', 1, uuid_id)
+        redis.call('HDEL', queue_expiry_secs_key, uuid_id)
+        redis.call('HDEL', queue_position_cache_key, uuid_id)
+        redis.call('LREM', queue_ids_key, 1, uuid_id)
         position_modifier = position_modifier - 1
         removed = removed + 1
     else
-        redis.call('HSET', ARGV[1] .. ':queue_position_cache', uuid_id, i + position_modifier + 1)
+        redis.call('HSET', queue_position_cache_key, uuid_id, i + position_modifier + 1)
     end
 end
 return removed
