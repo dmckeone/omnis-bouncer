@@ -267,7 +267,7 @@ pub async fn omnis_studio_upstream(
     };
 
     // Process Request on Upstream
-    let client = &state.client;
+    let client = &state.http_client;
     let response = client
         .request(method.clone(), upstream_uri.clone())
         .headers(headers.clone())

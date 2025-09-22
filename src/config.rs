@@ -8,6 +8,7 @@ use crate::upstream::Upstream;
 pub struct Config {
     pub app_name: String,
     pub cookie_secret_key: axum_extra::extract::cookie::Key,
+    pub redis_uri: String,
     pub initial_upstream: Vec<Upstream>,
     pub public_tls_pair: (Vec<u8>, Vec<u8>),
     pub monitor_tls_pair: (Vec<u8>, Vec<u8>),
@@ -41,6 +42,7 @@ impl Default for Config {
         Self {
             app_name: String::from("Omnis Studio Bouncer"),
             cookie_secret_key: axum_extra::extract::cookie::Key::generate(),
+            redis_uri: String::from("redis://127.0.0.1/"),
             initial_upstream: vec![Upstream::new("http://127.0.0.1:63111", 100, 10)],
             public_tls_pair: (SELF_SIGNED_CERT.to_vec(), SELF_SIGNED_KEY.to_vec()),
             monitor_tls_pair: (SELF_SIGNED_CERT.to_vec(), SELF_SIGNED_KEY.to_vec()),

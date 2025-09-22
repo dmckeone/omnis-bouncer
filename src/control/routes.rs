@@ -10,21 +10,17 @@ use axum::{
 use futures_util::stream::Stream;
 use http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
 use std::convert::Infallible;
-use tokio_stream::{
-    wrappers::errors::BroadcastStreamRecvError, wrappers::BroadcastStream, StreamExt,
-};
+use tokio_stream::StreamExt;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tower_serve_static::{File, ServeDir, ServeFile};
-use tracing::error;
 
-use crate::constants::{DEBOUNCE_INTERVAL, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
+use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
 use crate::control::models::{Event, Info, Settings, SettingsPatch, Status};
 use crate::errors::Result;
-use crate::queue::{QueueEvent, StoreCapacity};
+use crate::queue::{QueueEvent, QueueSubscriber, StoreCapacity};
 use crate::signals::cancellable;
 use crate::state::AppState;
-use crate::stream::debounce;
 
 #[cfg(debug_assertions)]
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
@@ -81,7 +77,7 @@ async fn read_health() -> impl IntoResponse {
     "ok"
 }
 
-// Current state of Queue Settings
+// Current s + use<>tate of Queue Settings
 async fn read_info(State(state): State<AppState>) -> Result<impl IntoResponse> {
     let state = state.clone();
     let config = &state.config;
@@ -155,19 +151,6 @@ async fn read_status(State(state): State<AppState>) -> Result<impl IntoResponse>
     Ok(Json(Status::from(queue_status)))
 }
 
-/// Filter out any errors from the Broadcast stream and log them, leaving only valid queue events
-fn filter_queue_event(
-    queue_event: core::result::Result<QueueEvent, BroadcastStreamRecvError>,
-) -> Option<QueueEvent> {
-    match queue_event {
-        Ok(ev) => Some(ev),
-        Err(e) => {
-            error!("Failed to receive queue event: {}", e);
-            None
-        }
-    }
-}
-
 /// Translate an incoming queue event into a standard format for events as strings
 fn translate_queue_event(
     queue_event: QueueEvent,
@@ -184,17 +167,11 @@ async fn server_sent_events(
 ) -> Sse<impl Stream<Item = core::result::Result<SSEvent, Infallible>>> {
     let state = state.clone();
 
-    // Subscribe to queue updates
-    let receiver = state.queue.subscribe();
-
     // Create Broadcast stream that is infallible
-    let broadcast_stream = BroadcastStream::new(receiver).filter_map(filter_queue_event);
-
-    // Deduplicate events across a period of time
-    let debounce_stream = debounce(DEBOUNCE_INTERVAL, broadcast_stream);
+    let stream = QueueSubscriber::typed_stream(state.queue_subscriber.clone());
 
     // Translate into a public facing API
-    let sse_stream = debounce_stream.filter_map(translate_queue_event);
+    let sse_stream = stream.filter_map(translate_queue_event);
 
     // Ensure that the stream doesn't prevent the server from shutting down
     let safe_stream = cancellable(sse_stream, state.shutdown_notifier.clone());

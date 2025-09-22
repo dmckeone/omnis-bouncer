@@ -235,6 +235,36 @@ pub enum QueueEvent {
     StoreExpired,
 }
 
+impl From<QueueEvent> for String {
+    fn from(event: QueueEvent) -> Self {
+        match event {
+            QueueEvent::SettingsChanged => String::from("settings:updated"),
+            QueueEvent::WaitingPageChanged => String::from("waiting_page:updated"),
+            QueueEvent::QueueAdded => String::from("queue:added"),
+            QueueEvent::QueueExpired => String::from("queue:expired"),
+            QueueEvent::StoreAdded => String::from("store:added"),
+            QueueEvent::StoreExpired => String::from("store:expired"),
+            QueueEvent::QueueRemoved => String::from("queue:removed"),
+        }
+    }
+}
+
+impl TryFrom<&str> for QueueEvent {
+    type Error = Error;
+    fn try_from(value: &str) -> Result<Self> {
+        match value {
+            "settings:updated" => Ok(QueueEvent::SettingsChanged),
+            "waiting_page:updated" => Ok(QueueEvent::WaitingPageChanged),
+            "queue:added" => Ok(QueueEvent::QueueAdded),
+            "queue:expired" => Ok(QueueEvent::QueueExpired),
+            "store:added" => Ok(QueueEvent::StoreAdded),
+            "store:expired" => Ok(QueueEvent::StoreExpired),
+            "queue:removed" => Ok(QueueEvent::QueueRemoved),
+            _ => Err(Error::RedisEventUnknown(String::from(value))),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

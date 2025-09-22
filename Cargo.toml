@@ -20,7 +20,7 @@ futures-util = "0.3"
 include_dir = "0.7"
 lazy_static = "1.5"
 minify-html-onepass = "0.16"
-redis = { version = "0.32", features = ["tokio-rustls-comp"] }
+redis = { version = "0.32", features = ["aio", "tokio-rustls-comp"] }
 regex = "1.11"
 reqwest = { version = "0.12", features = ["stream", "rustls-tls"] }
 rustls = { version = "0.23", features = ["aws_lc_rs"] }

@@ -1,18 +1,21 @@
 use chrono::{DateTime, Utc};
-use deadpool_redis::{redis, Connection, Pool as RedisPool};
+use deadpool_redis::{Connection, Pool as RedisPool};
+use futures_util::Stream;
 use lazy_static::lazy_static;
 use minify_html_onepass::{copy as minify, Cfg};
-use redis::{pipe, AsyncTypedCommands};
+use redis::{self, pipe, AsyncTypedCommands};
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
 };
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{Notify, RwLock};
+use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::constants::{DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
-use crate::database::{current_time, get_connection};
+use crate::constants::{DEBOUNCE_INTERVAL, DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
+use crate::database::{current_time, get_connection, RedisSubscriber};
 use crate::errors::Result;
 use crate::queue::models::{
     QueueEnabled, QueueEvent, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
@@ -21,6 +24,7 @@ use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
     waiting_page_key, Scripts,
 };
+use crate::stream::debounce;
 
 lazy_static! {
     static ref minfiy_cfg: Cfg = Cfg {
@@ -40,13 +44,60 @@ lazy_static! {
     .expect("Failed to convert bundled waiting page to string");
 }
 
+#[derive(Debug, Clone)]
+pub struct QueueSubscriber {
+    redis_subscriber: RedisSubscriber,
+}
+
+impl QueueSubscriber {
+    pub async fn from_client(
+        client: redis::Client,
+        channel_name: String,
+        cancel: Arc<Notify>,
+    ) -> Result<Self> {
+        Ok(Self {
+            redis_subscriber: RedisSubscriber::from_client(client, channel_name, cancel).await?,
+        })
+    }
+
+    pub fn stream_filter(
+        value: core::result::Result<String, BroadcastStreamRecvError>,
+    ) -> Option<QueueEvent> {
+        let value = match value {
+            Ok(value) => value,
+            Err(err) => {
+                error!("Failed to parse Redis event: {:?}", err);
+                return None;
+            }
+        };
+
+        let event = match QueueEvent::try_from(value.as_str()) {
+            Ok(event) => event,
+            Err(err) => {
+                error!("Failed to parse Redis event: {:?}", err);
+                return None;
+            }
+        };
+
+        Some(event)
+    }
+
+    /// Create a typed stream from the queue subscriber
+    // TODO: Figure out how to make this work with &self and lifetimes
+    pub fn typed_stream(subscriber: QueueSubscriber) -> impl Stream<Item = QueueEvent> {
+        let broadcast_stream = subscriber.redis_subscriber.stream();
+        let queue_event_stream = broadcast_stream.filter_map(Self::stream_filter);
+
+        // Deduplicate events across a period of time
+        debounce(DEBOUNCE_INTERVAL, queue_event_stream)
+    }
+}
+
 pub struct QueueControl {
     pool: RedisPool,
     quarantine_expiry: Duration,
     validated_expiry: Duration,
     scripts: Scripts,
-    broadcast: broadcast::Sender<QueueEvent>,
-    _receiver: broadcast::Receiver<QueueEvent>,
     throttle_buffer: RwLock<HashMap<QueueEvent, Instant>>,
     emit_throttle: Duration,
     waiting_page_cache: RwLock<HashMap<String, String>>,
@@ -59,15 +110,11 @@ impl QueueControl {
         validated_expiry: Duration,
         emit_throttle: Duration,
     ) -> Result<Self> {
-        let (broadcast, receiver) = broadcast::channel::<QueueEvent>(50);
-
         let queue = Self {
             pool,
             quarantine_expiry,
             validated_expiry,
             scripts: Scripts::new()?,
-            broadcast,
-            _receiver: receiver, // Keep a single receiver around so the channel doesn't close
             throttle_buffer: RwLock::new(HashMap::new()),
             emit_throttle,
             waiting_page_cache: RwLock::new(HashMap::new()),
@@ -111,6 +158,17 @@ impl QueueControl {
         Ok(())
     }
 
+    pub async fn subscriber(
+        client: redis::Client,
+        prefix: impl Into<String>,
+        cancel: Arc<Notify>,
+    ) -> Result<QueueSubscriber> {
+        let prefix = prefix.into();
+        let channel_name = format!("{}:events", prefix);
+        let subscriber = QueueSubscriber::from_client(client, channel_name, cancel).await?;
+        Ok(subscriber)
+    }
+
     // Create a new ID for use in the Queue
     pub fn new_id(&self) -> Uuid {
         Uuid::new_v4()
@@ -120,13 +178,16 @@ impl QueueControl {
         get_connection(&self.pool).await
     }
 
-    /// Return a broadcast receiver that emits events from the queue
-    pub fn subscribe(&self) -> broadcast::Receiver<QueueEvent> {
-        self.broadcast.subscribe()
-    }
-
     /// Emit an event from this QueueControl, throttled by the emit limit
-    pub async fn emit(&self, event: QueueEvent, now: Option<Instant>) {
+    pub async fn emit(
+        &self,
+        conn: &mut Connection,
+        prefix: impl Into<String>,
+        event: QueueEvent,
+        now: Option<Instant>,
+    ) {
+        let prefix = prefix.into();
+
         // Check if event needs to be throttled
         {
             let guard = self.throttle_buffer.read().await;
@@ -141,11 +202,12 @@ impl QueueControl {
             }
         }
 
-        // Otherwise emit event and insert the event into the event throttle buffer
-        if let Err(error) = self.broadcast.send(event.clone()) {
-            // EARLY EXIT: Failed to emit the event
-            error!("Failed to send queue event - \"{:?}\": {}", event, error);
-            return;
+        let string_event = String::from(event.clone());
+        if let Err(error) = conn
+            .publish(format!("{}:events", prefix), string_event)
+            .await
+        {
+            error!("Failed to send \"{:?}\": {:?}", event, error);
         }
 
         // Write successful event to the event throttle buffer
@@ -243,7 +305,8 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        self.emit(QueueEvent::SettingsChanged, None).await;
+        self.emit(&mut conn, &prefix, QueueEvent::SettingsChanged, None)
+            .await;
 
         Ok(())
     }
@@ -263,7 +326,8 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        self.emit(QueueEvent::SettingsChanged, None).await;
+        self.emit(&mut conn, &prefix, QueueEvent::SettingsChanged, None)
+            .await;
 
         Ok(())
     }
@@ -288,7 +352,8 @@ impl QueueControl {
             .query_async(&mut conn)
             .await?;
 
-        self.emit(QueueEvent::SettingsChanged, None).await;
+        self.emit(&mut conn, &prefix, QueueEvent::SettingsChanged, None)
+            .await;
 
         Ok(())
     }
@@ -361,7 +426,8 @@ impl QueueControl {
         let mut conn = self.conn().await?;
         conn.set(waiting_page_key(&prefix), waiting_page).await?;
 
-        self.emit(QueueEvent::WaitingPageChanged, None).await;
+        self.emit(&mut conn, &prefix, QueueEvent::WaitingPageChanged, None)
+            .await;
 
         Ok(())
     }
@@ -438,13 +504,14 @@ impl QueueControl {
         id: Uuid,
         time: Option<DateTime<Utc>>,
     ) -> Result<QueuePosition> {
+        let prefix = prefix.into();
         let mut conn = self.conn().await?;
 
         let (added, position) = self
             .scripts
             .id_position(
                 &mut conn,
-                prefix,
+                &prefix,
                 id,
                 time,
                 self.validated_expiry,
@@ -458,7 +525,7 @@ impl QueueControl {
                 QueuePosition::Store => QueueEvent::StoreAdded,
                 QueuePosition::Queue(_) => QueueEvent::QueueAdded,
             };
-            self.emit(event, None).await;
+            self.emit(&mut conn, &prefix, event, None).await;
         }
 
         Ok(position)
@@ -471,9 +538,11 @@ impl QueueControl {
         id: Uuid,
         time: Option<DateTime<Utc>>,
     ) -> Result<()> {
+        let prefix = prefix.into();
         let mut conn = self.conn().await?;
-        self.scripts.id_remove(&mut conn, prefix, id, time).await?;
-        self.emit(QueueEvent::QueueRemoved, None).await;
+        self.scripts.id_remove(&mut conn, &prefix, id, time).await?;
+        self.emit(&mut conn, &prefix, QueueEvent::QueueRemoved, None)
+            .await;
         Ok(())
     }
 
@@ -483,17 +552,21 @@ impl QueueControl {
         prefix: impl Into<String>,
         time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
+        let prefix = prefix.into();
         let mut conn = self.conn().await?;
-        let rotate = self.scripts.rotate_full(&mut conn, prefix, time).await?;
+        let rotate = self.scripts.rotate_full(&mut conn, &prefix, time).await?;
 
         if rotate.promoted > 0 {
-            self.emit(QueueEvent::StoreAdded, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
+                .await;
         }
         if rotate.queue_expired > 0 {
-            self.emit(QueueEvent::QueueExpired, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::QueueExpired, None)
+                .await;
         }
         if rotate.store_expired > 0 {
-            self.emit(QueueEvent::StoreExpired, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::StoreExpired, None)
+                .await;
         }
 
         Ok(rotate)
@@ -505,17 +578,21 @@ impl QueueControl {
         prefix: impl Into<String>,
         time: Option<DateTime<Utc>>,
     ) -> Result<QueueRotate> {
+        let prefix = prefix.into();
         let mut conn = self.conn().await?;
-        let rotate = self.scripts.rotate_expire(&mut conn, prefix, time).await?;
+        let rotate = self.scripts.rotate_expire(&mut conn, &prefix, time).await?;
 
         if rotate.promoted > 0 {
-            self.emit(QueueEvent::StoreAdded, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
+                .await;
         }
         if rotate.queue_expired > 0 {
-            self.emit(QueueEvent::QueueExpired, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::QueueExpired, None)
+                .await;
         }
         if rotate.store_expired > 0 {
-            self.emit(QueueEvent::StoreExpired, None).await;
+            self.emit(&mut conn, &prefix, QueueEvent::StoreExpired, None)
+                .await;
         }
 
         Ok(rotate)

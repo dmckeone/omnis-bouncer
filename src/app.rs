@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::background::run as background_run;
 use crate::config::Config;
-use crate::database::create_redis_pool;
+use crate::database::{create_redis_client, create_redis_pool};
 use crate::queue::QueueControl;
 use crate::servers::{redirect_http_to_https, secure_server};
 use crate::signals::shutdown_signal;
@@ -22,7 +22,7 @@ pub async fn run(
     background_notify: Arc<Notify>,
 ) {
     // Create Redis Pool
-    let redis = match create_redis_pool("redis://127.0.0.1/?protocol=resp3") {
+    let redis_pool = match create_redis_pool(&config.redis_uri) {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to connect to redis: {:?}", e);
@@ -30,9 +30,18 @@ pub async fn run(
         }
     };
 
+    // Create Redis subscriber client
+    let redis_client = match create_redis_client(&config.redis_uri) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("Failed to connect to redis subscriber: {:?}", e);
+            return;
+        }
+    };
+
     // Create queue control and initialize functions
     let queue = match QueueControl::new(
-        redis,
+        redis_pool,
         config.quarantine_expiry,
         config.validated_expiry,
         config.emit_throttle,
@@ -56,6 +65,18 @@ pub async fn run(
         error!("Failed to initialize queue: {:?}", e);
         return;
     };
+
+    // Create queue subscriber, for emitted events
+    let queue_subscriber =
+        match QueueControl::subscriber(redis_client, &config.queue_prefix, stream_notify.clone())
+            .await
+        {
+            Ok(s) => s,
+            Err(error) => {
+                error!("Failed to initialize Redis subscriber: {:?}", error);
+                return;
+            }
+        };
 
     // Create a new http client pool
     let http_client = Client::builder()
@@ -86,6 +107,7 @@ pub async fn run(
         config,
         stream_notify.clone(),
         queue,
+        queue_subscriber,
         upstream_pool,
         http_client,
     );

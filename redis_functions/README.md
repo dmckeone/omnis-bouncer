@@ -25,6 +25,10 @@ Redis database, using the same functions
       queue
       state was last synced to a database
 
+## Events
+
+* `:events`: `PUBLISH`/`SUBSCRIBE` channel for events
+
 ## Internal State Tracking
 
 * **Store**
