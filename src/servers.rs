@@ -1,15 +1,13 @@
-use axum::extract::Request;
 use axum::{
-    handler::HandlerWithoutStateExt, http::{uri::Authority, uri::Scheme, StatusCode, Uri}, response::Redirect,
+    extract::Request, handler::HandlerWithoutStateExt, http::{uri::Authority, uri::Scheme, StatusCode, Uri},
+    response::Redirect,
     BoxError,
     Router,
     ServiceExt,
 };
 use axum_extra::extract::Host;
-use axum_server::tls_rustls::RustlsConfig;
-use axum_server::Handle;
-use std::io;
-use std::net::SocketAddr;
+use axum_server::{tls_rustls::RustlsConfig, Handle};
+use std::{io, net::SocketAddr};
 
 /// Create an insecure server from an Axum router
 #[allow(unused)]

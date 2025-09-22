@@ -1,11 +1,11 @@
 use async_stream::stream;
 use axum_server::Handle;
 use futures_util::{pin_mut, Stream, StreamExt};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
-use tokio::sync::Notify;
-use tokio::time::sleep;
-use tokio::{select, signal};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+use tokio::{select, signal, sync::Notify, time::sleep};
 use tracing::info;
 
 use crate::constants::SHUTDOWN_TIMEOUT;

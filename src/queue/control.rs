@@ -1,3 +1,16 @@
+use chrono::{DateTime, Utc};
+use deadpool_redis::{redis, Connection, Pool as RedisPool};
+use lazy_static::lazy_static;
+use minify_html_onepass::{copy as minify, Cfg};
+use redis::{pipe, AsyncTypedCommands};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+use tokio::sync::{broadcast, RwLock};
+use tracing::error;
+use uuid::Uuid;
+
 use crate::constants::{DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
 use crate::database::{current_time, get_connection};
 use crate::errors::Result;
@@ -8,16 +21,6 @@ use crate::queue::scripts::{
     queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
     waiting_page_key, Scripts,
 };
-use chrono::{DateTime, Utc};
-use deadpool_redis::{redis, Connection, Pool as RedisPool};
-use lazy_static::lazy_static;
-use minify_html_onepass::{copy as minify, Cfg};
-use redis::{pipe, AsyncTypedCommands};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use tokio::sync::{broadcast, RwLock};
-use tracing::error;
-use uuid::Uuid;
 
 lazy_static! {
     static ref minfiy_cfg: Cfg = Cfg {
@@ -28,13 +31,13 @@ lazy_static! {
         minify(
             HTML_TEMPLATE_DIR
                 .get_file(DEFAULT_WAITING_ROOM_PAGE)
-                .expect("Failed to read default waiting room from app")
+                .expect("Failed to read bundled waiting room page")
                 .contents(),
             &minfiy_cfg
         )
-        .expect("Failed to minify default waiting page")
+        .expect("Failed to minify bundled default waiting page")
     )
-    .expect("Failed to convert default waiting page to string");
+    .expect("Failed to convert bundled waiting page to string");
 }
 
 pub struct QueueControl {

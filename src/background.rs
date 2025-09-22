@@ -1,14 +1,11 @@
 use std::sync::Arc;
-use tokio::sync::Notify;
-use tokio::time::sleep;
-use tokio::{join, select};
+use tokio::{join, select, sync::Notify, time::sleep};
 use tracing::{error, info};
 
 use crate::constants::BACKGROUND_SLEEP_TIME;
-use crate::errors::Result;
 use crate::state::AppState;
 
-pub async fn background_task_loop(state: AppState, shutdown_notifier: Arc<Notify>) -> Result<()> {
+pub async fn run(state: AppState, shutdown_notifier: Arc<Notify>) {
     info!("Starting background tasks");
     loop {
         background_tasks(state.clone()).await;
@@ -20,7 +17,6 @@ pub async fn background_task_loop(state: AppState, shutdown_notifier: Arc<Notify
         }
     }
     info!("Shutdown background tasks");
-    Ok(())
 }
 
 /// Tasks that run periodically in the background

@@ -1,9 +1,11 @@
-use crate::errors::Result;
-use crate::queue::{QueueControl, QueuePosition};
-use crate::state::{AppState, Config};
-use crate::upstream::{ConnectionPermit, UpstreamPool};
-use axum::extract::{OriginalUri, Request, State};
-use axum::response::IntoResponse;
+use axum::{
+    error_handling::HandleErrorLayer, extract::{OriginalUri, Request, State},
+    response::IntoResponse,
+    routing::{any, get},
+    BoxError,
+    Router,
+};
+use axum_response_cache::CacheLayer;
 use http::header::{
     ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
     PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
@@ -13,14 +15,125 @@ use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use http_types::Mime;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
-use std::collections::HashSet;
-use std::str::FromStr;
-use std::time::Duration;
-use tower_cookies::cookie::time::OffsetDateTime;
-use tower_cookies::cookie::{Expiration, SameSite};
-use tower_cookies::{Cookie, Cookies, PrivateCookies};
+use std::{collections::HashSet, str::FromStr, time::Duration};
+use tower::{buffer::BufferLayer, limit::RateLimitLayer, load_shed::LoadShedLayer, ServiceBuilder};
+use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
+use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info};
-use uuid::Uuid;
+
+use crate::cookies::add_private_server_cookie;
+use crate::errors::Result;
+use crate::state::AppState;
+use crate::upstream::{ConnectionPermit, UpstreamPool};
+use crate::waiting_room::{check_waiting_page, extract_queue_id, QueueId, WaitingRoom};
+
+fn cache_router<T>(state: AppState) -> Router<T> {
+    let config = &state.config;
+
+    // Asset cache for any resources that are static and common to all upstream servers
+    let asset_cache = CacheLayer::with_lifespan(config.asset_cache_secs).use_stale_on_failure();
+
+    Router::new()
+        .route("/favicon.ico", get(omnis_studio_upstream))
+        .route("/jschtml/css/{*key}", get(omnis_studio_upstream))
+        .route("/jschtml/fonts/{*key}", get(omnis_studio_upstream))
+        .route("/jschtml/icons/{*key}", get(omnis_studio_upstream))
+        .route("/jschtml/images/{*key}", get(omnis_studio_upstream))
+        .route("/jschtml/scripts/{*key}", get(omnis_studio_upstream))
+        .route("/jschtml/themes/{*key}", get(omnis_studio_upstream))
+        .route_layer(asset_cache)
+        .with_state(state.clone())
+}
+
+fn api_router<T>(state: AppState) -> Router<T> {
+    let config = &state.config;
+
+    let mut api_router = Router::new().route("/api/{*key}", any(omnis_studio_upstream));
+
+    if state.config.api_rate_limit_per_sec > 0 {
+        api_router = api_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("API Rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    config.api_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+
+    api_router.with_state(state.clone())
+}
+
+fn ultra_thin_router<T>(state: AppState) -> Router<T> {
+    let mut ultra_router = Router::new().route("/ultra", any(omnis_studio_upstream));
+
+    if state.config.ultra_rate_limit_per_sec > 0 {
+        ultra_router = ultra_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("Ultra-Thin rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(state.config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    state.config.ultra_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+
+    ultra_router.with_state(state.clone())
+}
+
+fn javascript_client_router<T>(state: AppState) -> Router<T> {
+    let mut jsclient_router = Router::new()
+        .route("/jschtml/{*key}", any(omnis_studio_upstream))
+        .route("/jsclient", any(omnis_studio_upstream))
+        .route("/push", any(omnis_studio_upstream));
+
+    if state.config.js_client_rate_limit_per_sec > 0 {
+        jsclient_router = jsclient_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("JS Client rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(state.config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    state.config.js_client_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+
+    jsclient_router.with_state(state.clone())
+}
+
+// Build the router for the reverse proxy system
+pub fn router(state: AppState) -> Router {
+    Router::new()
+        .merge(cache_router(state.clone()))
+        .merge(javascript_client_router(state.clone()))
+        .merge(ultra_thin_router(state.clone()))
+        .merge(api_router(state.clone()))
+        .fallback(omnis_studio_upstream)
+        .with_state(state.clone())
+        .layer(CookieManagerLayer::new())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new())
+        .layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("load shed error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(LoadShedLayer::new()),
+        )
+}
 
 lazy_static! {
     static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
@@ -67,7 +180,7 @@ lazy_static! {
         .unwrap();
 }
 
-pub async fn omnis_studio_reverse_proxy(
+pub async fn omnis_studio_upstream(
     State(state): State<AppState>,
     method: Method,
     cookies: Cookies,
@@ -190,188 +303,6 @@ pub async fn omnis_studio_reverse_proxy(
     Ok((response_status, response_headers, response_body))
 }
 
-async fn check_waiting_page(
-    config: &Config,
-    cookies: &Cookies,
-    queue: &QueueControl,
-    queue_id: QueueId,
-) -> Result<Option<(HeaderMap, axum::body::Body)>> {
-    let queue_prefix = config.queue_prefix.clone();
-
-    let position = queue
-        .id_position(queue_prefix.clone(), queue_id.into(), None)
-        .await?;
-
-    let position = match position {
-        QueuePosition::Queue(pos) => pos,
-        QueuePosition::Store => return Ok(None),
-    };
-
-    // Determine general queue status
-    let status = queue.queue_status(queue_prefix.clone()).await?;
-    let position_string = position.to_string();
-    let size_string = status.queue_size.to_string();
-
-    // Fetch waiting page
-    let mut waiting_headers = HeaderMap::new();
-    waiting_headers.insert(CONTENT_TYPE, "text/html".parse()?);
-
-    let waiting_page_body: axum::body::Body =
-        queue.cached_waiting_page(queue_prefix.clone()).await.into();
-
-    waiting_headers.insert(
-        HeaderName::from_lowercase(config.position_http_header.as_bytes())?,
-        position_string.parse()?,
-    );
-    waiting_headers.insert(
-        HeaderName::from_lowercase(config.queue_size_http_header.as_bytes())?,
-        size_string.parse()?,
-    );
-
-    add_browser_cookie(
-        cookies,
-        config.position_cookie_name.clone(),
-        position_string,
-    );
-    add_browser_cookie(cookies, config.queue_size_cookie_name.clone(), size_string);
-
-    Ok(Some((waiting_headers, waiting_page_body)))
-}
-
-enum CookieStatus {
-    Added,
-    Unchanged,
-}
-
-// Return true if a cookie exists with the given value already set
-fn cookie_exists(cookies: &Cookies, name: impl Into<String>, value: impl Into<String>) -> bool {
-    let name = name.into();
-    let value = value.into();
-    match cookies.get(name.as_str()) {
-        Some(cookie) => cookie.value() == value,
-        None => false,
-    }
-}
-
-// Create a cookie for returning to the caller in a way that can be consumed by Javascript in the
-// browser
-fn add_browser_cookie(
-    cookies: &Cookies,
-    name: impl Into<String>,
-    value: impl Into<String>,
-) -> CookieStatus {
-    let name = name.into();
-    let value = value.into();
-
-    if cookie_exists(cookies, name.clone(), value.clone()) {
-        return CookieStatus::Unchanged;
-    }
-
-    cookies.add(browser_cookie(name, value));
-    CookieStatus::Added
-}
-
-fn browser_cookie<'a>(name: String, value: String) -> Cookie<'a> {
-    Cookie::build((name, value))
-        .same_site(SameSite::Strict)
-        .secure(true)
-        .path("/")
-        .build()
-}
-
-fn server_cookie<'a>(name: String, value: String, expiry: Option<Duration>) -> Cookie<'a> {
-    let mut cookie = Cookie::build((name, value))
-        .same_site(SameSite::Strict)
-        .secure(true)
-        .path("/")
-        .build();
-
-    if let Some(expiry) = expiry {
-        cookie.set_expires(Expiration::from(OffsetDateTime::now_utc() + expiry));
-    }
-    cookie
-}
-
-// Return true if a cookie exists with the given value already set
-fn private_cookie_exists(
-    cookies: &PrivateCookies,
-    name: impl Into<String>,
-    value: impl Into<String>,
-) -> bool {
-    let name = name.into();
-    let value = value.into();
-    match cookies.get(name.as_str()) {
-        Some(cookie) => cookie.value() == value,
-        None => false,
-    }
-}
-
-// Create a cookie that is only accessible by the server, and not consumable by the Javascript
-fn add_private_server_cookie(
-    cookies: &PrivateCookies,
-    name: impl Into<String>,
-    value: impl Into<String>,
-    expiry: Option<Duration>,
-) -> CookieStatus {
-    let name = name.into();
-    let value = value.into();
-    if private_cookie_exists(cookies, name.clone(), value.clone()) {
-        return CookieStatus::Unchanged;
-    }
-
-    cookies.add(server_cookie(name, value, expiry));
-    CookieStatus::Added
-}
-
-#[derive(Copy, Clone, Debug)]
-enum QueueId {
-    New(Uuid),
-    Existing(Uuid),
-}
-
-impl From<QueueId> for String {
-    fn from(queue_id: QueueId) -> Self {
-        match queue_id {
-            QueueId::New(id) => String::from(id),
-            QueueId::Existing(id) => String::from(id),
-        }
-    }
-}
-
-impl From<QueueId> for Uuid {
-    fn from(queue_id: QueueId) -> Self {
-        match queue_id {
-            QueueId::New(id) => id,
-            QueueId::Existing(id) => id,
-        }
-    }
-}
-
-/// Extract a queue token from a cookie
-fn extract_queue_id(queue: &QueueControl, cookie: &Option<Cookie>) -> QueueId {
-    // Extract ID from cookie
-    let cookie_id = match cookie {
-        Some(c) => match Uuid::parse_str(c.value()) {
-            Ok(c) => Some(c),
-            Err(e) => {
-                error!(
-                    "Failed to parse Queue ID cookie as UUID \"{}\": {}",
-                    c.value(),
-                    e
-                );
-                None
-            }
-        },
-        None => None,
-    };
-
-    // Return existing ID, or create a new one
-    match cookie_id {
-        Some(cookie_id) => QueueId::Existing(cookie_id),
-        None => QueueId::New(queue.new_id()),
-    }
-}
-
 fn is_html_page(headers: &HeaderMap, path: &str) -> bool {
     // Parse Accept header to see if the client is requesting HTML
     let requires_html = match headers.get(ACCEPT) {
@@ -405,7 +336,7 @@ fn is_ultra_thin(path: &str) -> bool {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum ConnectionType {
+pub enum ConnectionType {
     CacheLoad,
     StickySession,
     Regular(WaitingRoom),
@@ -449,14 +380,8 @@ impl ConnectionType {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum WaitingRoom {
-    Required,
-    Skip,
-}
-
 // Get a connection permit for the request, based on the method and path.
-async fn get_connection(
+pub async fn get_connection(
     pool: &UpstreamPool,
     connection_type: ConnectionType,
     queue_token: Option<QueueId>,
@@ -472,6 +397,6 @@ async fn get_connection(
         },
         ConnectionType::Regular(_) => pool.acquire_connection_permit(timeout).await,
         ConnectionType::CacheLoad => pool.acquire_cache_load_permit().await,
-        ConnectionType::Reject => panic!("Should never be called with Reject"),
+        ConnectionType::Reject => None,
     }
 }

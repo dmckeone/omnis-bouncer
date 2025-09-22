@@ -1,74 +1,30 @@
+mod app;
 mod background;
+mod config;
 mod constants;
 mod control;
+mod cookies;
 mod database;
 mod errors;
+mod omnis;
 mod queue;
-mod reverse_proxy;
+mod secrets;
 mod servers;
 mod signals;
 mod state;
 mod stream;
 mod upstream;
+mod waiting_room;
 
-use axum::error_handling::HandleErrorLayer;
-use axum::routing::{any, get};
-use axum::{BoxError, Router};
-use axum_extra::extract::cookie::Key as PrivateCookieKey;
-use axum_response_cache::CacheLayer;
-use axum_server::tls_rustls::RustlsConfig;
 use axum_server::Handle;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use http::StatusCode;
-use reqwest::Client;
-use std::net::SocketAddr;
+use config::Config;
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::join;
 use tokio::sync::Notify;
-use tower::buffer::BufferLayer;
-use tower::limit::RateLimitLayer;
-use tower::load_shed::LoadShedLayer;
-use tower::ServiceBuilder;
-use tower_cookies::CookieManagerLayer;
-use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
-use tracing::{error, info, Level};
+use tracing::{info, Level};
 
-use crate::background::background_task_loop;
-use crate::constants::{SELF_SIGNED_CERT, SELF_SIGNED_KEY};
-use crate::database::create_redis_pool;
-use crate::queue::{QueueControl, StoreCapacity};
-use crate::reverse_proxy::omnis_studio_reverse_proxy;
-use crate::servers::{redirect_http_to_https, secure_server};
-use crate::signals::shutdown_signal;
-use crate::state::{AppState, Config};
-use crate::upstream::{Upstream, UpstreamPool};
+use crate::secrets::decode_master_key;
 
-// Testing functions for adding dynamic upstream values
-fn test_dynamic_upstreams(state: AppState) {
-    tokio::task::spawn(async move {
-        state
-            .upstream_pool
-            .add_upstreams(&[Upstream::new(
-                String::from("http://127.0.0.1:63111"),
-                100,
-                10,
-            )])
-            .await;
-        info!("Pool State: {:?}", state.upstream_pool.current_uris().await);
-    });
-}
-
-fn decode_key(master_key: impl Into<String>) -> anyhow::Result<PrivateCookieKey> {
-    let master_key = master_key.into();
-    match STANDARD.decode(master_key) {
-        Ok(k) => Ok(PrivateCookieKey::derive_from(k.as_slice())),
-        Err(error) => Err(error.into()),
-    }
-}
-
-#[tokio::main]
-async fn main() {
+fn main() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_max_level(Level::INFO)
@@ -85,288 +41,32 @@ async fn main() {
     let shutdown_handle = Handle::new();
     let stream_notify = Arc::new(Notify::new());
     let background_notify = Arc::new(Notify::new());
-    let shutdown_future = shutdown_signal(
-        shutdown_handle.clone(),
-        stream_notify.clone(),
-        background_notify.clone(),
-    );
 
-    // Build Config
-
-    // TODO: Move cookie master key into configuration parsing
-    let base64_master_key =
-        "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ==";
-
-    let cookie_secret_key = match decode_key(base64_master_key) {
-        Ok(k) => k,
-        Err(error) => {
-            error!("Failed to decode cookie master key: {}", error);
-            return;
-        }
-    };
-
-    let config = Config {
-        app_name: String::from("Omnis Studio Bouncer"),
-        cookie_secret_key,
-        id_cookie_name: String::from("omnis-bouncer-id"),
-        position_cookie_name: String::from("omnis-bouncer-queue-position"),
-        queue_size_cookie_name: String::from("omnis-bouncer-queue-size"),
-        position_http_header: String::from("x-omnis-bouncer-queue-position").to_lowercase(), // Must be lowercase
-        queue_size_http_header: String::from("x-omnis-bouncer-queue-size").to_lowercase(), // Must be lowercase
-        acquire_timeout: Duration::from_secs(10),
-        connect_timeout: Duration::from_secs(10),
-        cookie_id_expiration: Duration::from_secs(60 * 60 * 24), // 1 day
-        sticky_session_timeout: Duration::from_secs(60 * 10),    // 10 minutes
-        asset_cache_secs: Duration::from_secs(60),
-        buffer_connections: 10000,
-        js_client_rate_limit_per_sec: 0,
-        api_rate_limit_per_sec: 0,
-        ultra_rate_limit_per_sec: 0,
-        http_port: 3000,
-        https_port: 3001,
-        control_port: 2999,
-        queue_enabled: true,
-        store_capacity: StoreCapacity::Sized(5),
-        queue_prefix: String::from("omnis_bouncer"),
-        quarantine_expiry: Duration::from_secs(45),
-        validated_expiry: Duration::from_secs(600),
-        emit_throttle: Duration::from_millis(100),
-    };
-
-    // Create Redis Pool
-    let redis = match create_redis_pool("redis://127.0.0.1/?protocol=resp3") {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Failed to connect to redis: {:?}", e);
-            return;
-        }
-    };
-
-    // Create queue control and initialize functions
-    let queue = match QueueControl::new(
-        redis,
-        config.quarantine_expiry,
-        config.validated_expiry,
-        config.emit_throttle,
-    ) {
-        Ok(q) => q,
-        Err(e) => {
-            error!("Failed to initialize queue: {:?}", e);
-            return;
-        }
-    };
-
-    // Initialize queue functions
-    if let Err(e) = queue
-        .init(
-            &config.queue_prefix,
-            config.queue_enabled,
-            config.store_capacity,
-        )
-        .await
-    {
-        error!("Failed to initialize queue: {:?}", e);
-        return;
-    };
-
-    // Create a new http client pool
-    let client = Client::builder()
-        // .cookie_store(false) -- Disabled by default, unlesss "cookies" feature enabled
-        .connect_timeout(config.connect_timeout)
-        .redirect(reqwest::redirect::Policy::none())
-        .referer(false)
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
         .build()
-        .expect("Failed to build HTTP client");
+        .expect("Failed to build tokio runtime");
 
-    let upstream_pool = UpstreamPool::new(config.sticky_session_timeout);
+    let config = config();
 
-    // Create our app state
-    let state = AppState::new(config, stream_notify, queue, upstream_pool, client);
-
-    // Create apps
-    let control_app = build_control_app(&state);
-    let upstream_app = build_upstream_app(&state);
-
-    // TODO: Replace with better controls in Control App
-    test_dynamic_upstreams(state.clone());
-
-    let tls_config = RustlsConfig::from_pem(SELF_SIGNED_CERT.into(), SELF_SIGNED_KEY.into())
-        .await
-        .expect("Failed to read TLS certificate and key");
-
-    let upstream_upgrade_addr = SocketAddr::from(([0, 0, 0, 0], state.config.http_port));
-    let upstream_addr = SocketAddr::from(([0, 0, 0, 0], state.config.https_port));
-    let control_addr = SocketAddr::from(([0, 0, 0, 0], state.config.control_port));
-
-    let background_future = background_task_loop(state.clone(), background_notify.clone());
-
-    info!(
-        "HTTP Server running on http://{}:{}",
-        upstream_upgrade_addr.ip(),
-        upstream_upgrade_addr.port()
-    );
-    info!(
-        "HTTPS Server running on https://{}:{}",
-        upstream_addr.ip(),
-        upstream_addr.port()
-    );
-    info!(
-        "HTTPS Control Server running on https://{}:{}",
-        control_addr.ip(),
-        control_addr.port()
-    );
-
-    let exit = join!(
-        shutdown_future,
-        secure_server(
-            upstream_addr,
-            tls_config.clone(),
-            shutdown_handle.clone(),
-            upstream_app
-        ),
-        secure_server(
-            control_addr,
-            tls_config.clone(),
-            shutdown_handle.clone(),
-            control_app
-        ),
-        redirect_http_to_https(
-            upstream_upgrade_addr,
-            upstream_addr.port(),
-            shutdown_handle.clone(),
-        ),
-        background_future
-    );
-
-    // Exit results (ignored)
-    if exit.0.is_err() {
-        error!("Failed to exit signal handler");
-    }
-    if exit.1.is_err() {
-        error!("Failed to exit upstream server");
-    }
-    if exit.2.is_err() {
-        error!("Failed to exit control server");
-    }
-    if exit.3.is_err() {
-        error!("Failed to exit redirect server");
-    }
-    if exit.4.is_err() {
-        error!("Failed to exit background task loop");
-    }
+    runtime.block_on(app::run(
+        config,
+        shutdown_handle,
+        stream_notify,
+        background_notify,
+    ));
 
     info!("Shutdown complete");
 }
 
-// Build app for controlling the configuration of this server
-fn build_control_app(state: &AppState) -> Router {
-    control::router(state.clone())
-        .layer(CookieManagerLayer::new())
-        .layer(RequestDecompressionLayer::new())
-        .layer(CompressionLayer::new())
-}
+fn config() -> Config {
+    // TODO: Move cookie master key into configuration parsing
+    let base64_master_key =
+        "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ==";
 
-// Build the router for the reverse proxy system
-fn build_upstream_app(state: &AppState) -> Router {
-    let config = &state.config;
-
-    // Asset cache for any resources that are static and common to all upstream servers
-    let asset_cache = CacheLayer::with_lifespan(config.asset_cache_secs).use_stale_on_failure();
-
-    let cache_router = Router::new()
-        .route("/favicon.ico", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/css/{*key}", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/fonts/{*key}", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/icons/{*key}", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/images/{*key}", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/scripts/{*key}", get(omnis_studio_reverse_proxy))
-        .route("/jschtml/themes/{*key}", get(omnis_studio_reverse_proxy))
-        .route_layer(asset_cache)
-        .with_state(state.clone());
-
-    // --------------------------------------------------------------------------------------------
-    // API
-    // --------------------------------------------------------------------------------------------
-    let mut api_router = Router::new().route("/api/{*key}", any(omnis_studio_reverse_proxy));
-
-    if state.config.api_rate_limit_per_sec > 0 {
-        api_router = api_router.route_layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    error!("API Rate limiter error: {}", err);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                }))
-                .layer(BufferLayer::new(config.buffer_connections))
-                .layer(RateLimitLayer::new(
-                    config.api_rate_limit_per_sec,
-                    Duration::from_secs(1),
-                )),
-        );
+    Config {
+        cookie_secret_key: decode_master_key(base64_master_key)
+            .expect("Failed to decode cookie master key"),
+        ..Config::default()
     }
-    let api_router = api_router.with_state(state.clone());
-
-    // --------------------------------------------------------------------------------------------
-    // Ultra Thin
-    // --------------------------------------------------------------------------------------------
-    let mut ultra_router = Router::new().route("/ultra", any(omnis_studio_reverse_proxy));
-
-    if state.config.ultra_rate_limit_per_sec > 0 {
-        ultra_router = ultra_router.route_layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    error!("Ultra-Thin rate limiter error: {}", err);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                }))
-                .layer(BufferLayer::new(state.config.buffer_connections))
-                .layer(RateLimitLayer::new(
-                    state.config.ultra_rate_limit_per_sec,
-                    Duration::from_secs(1),
-                )),
-        );
-    }
-    let ultra_router = ultra_router.with_state(state.clone());
-
-    // --------------------------------------------------------------------------------------------
-    // Javascript Client
-    // --------------------------------------------------------------------------------------------
-    let mut jsclient_router = Router::new()
-        .route("/jschtml/{*key}", any(omnis_studio_reverse_proxy))
-        .route("/jsclient", any(omnis_studio_reverse_proxy))
-        .route("/push", any(omnis_studio_reverse_proxy));
-
-    if state.config.js_client_rate_limit_per_sec > 0 {
-        jsclient_router = jsclient_router.route_layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    error!("JS Client rate limiter error: {}", err);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                }))
-                .layer(BufferLayer::new(state.config.buffer_connections))
-                .layer(RateLimitLayer::new(
-                    state.config.js_client_rate_limit_per_sec,
-                    Duration::from_secs(1),
-                )),
-        );
-    }
-    let jsclient_router = jsclient_router.with_state(state.clone());
-
-    // Upstream routing
-    Router::new()
-        .merge(cache_router)
-        .merge(jsclient_router)
-        .merge(ultra_router)
-        .merge(api_router)
-        .fallback(omnis_studio_reverse_proxy)
-        .with_state(state.clone())
-        .layer(CookieManagerLayer::new())
-        .layer(RequestDecompressionLayer::new())
-        .layer(CompressionLayer::new())
-        .layer(
-            ServiceBuilder::new()
-                .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                    error!("load shed error: {}", err);
-                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
-                }))
-                .layer(LoadShedLayer::new()),
-        )
 }

@@ -1,6 +1,5 @@
 use chrono::{DateTime, Utc};
-use deadpool_redis::redis::cmd;
-use deadpool_redis::{Config, Connection, Pool, Runtime};
+use deadpool_redis::{redis::cmd, Config, Connection, Pool, Runtime};
 
 use crate::errors::{Error, Result};
 

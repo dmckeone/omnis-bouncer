@@ -1,15 +1,18 @@
-use std::collections::{HashMap, HashSet};
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore};
-use tokio::task::JoinSet;
-use tokio::time::sleep;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use tokio::{
+    sync::{OwnedSemaphorePermit, RwLock, RwLockReadGuard, RwLockWriteGuard, Semaphore},
+    task::JoinSet,
+    time::sleep,
+};
 use tracing::error;
 use uuid::Uuid;
 
 /// Upstream specification
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Upstream {
     pub uri: String,
     pub connections: usize,
@@ -187,8 +190,7 @@ impl UpstreamPool {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
-            let upstreams = guard.deref();
-            upstreams.acquire_cache_load_permit()
+            (*guard).acquire_cache_load_permit()
         };
 
         // Transform into URIGuard for consumption, or None if no permits were available
@@ -206,8 +208,7 @@ impl UpstreamPool {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
-            let upstreams = guard.deref();
-            upstreams.acquire_connection_permit(timeout).await
+            (*guard).acquire_connection_permit(timeout).await
         };
 
         // Transform into URIGuard for consumption, or None if no permits were available
@@ -229,8 +230,7 @@ impl UpstreamPool {
         // Acquire the URI, holding the read lock for as little as possible
         let result = {
             let guard = self._read_lock().await;
-            let upstreams = guard.deref();
-            upstreams.acquire_sticky_permit(id, timeout).await
+            (*guard).acquire_sticky_permit(id, timeout).await
         };
 
         // Transform into URIGuard for consumption, or None if no permits were available
@@ -245,15 +245,13 @@ impl UpstreamPool {
 
     pub async fn expire_sticky_sessions(&self) -> HashSet<Uuid> {
         let guard = self._read_lock().await;
-        let upstreams = guard.deref();
-        upstreams.expire_sticky(self.sticky_expiry_secs).await
+        (*guard).expire_sticky(self.sticky_expiry_secs).await
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
     pub async fn current_uris(&self) -> Vec<(usize, String)> {
         let guard = self._read_lock().await;
-        let upstreams = guard.deref();
-        upstreams.current_uris()
+        (*guard).current_uris()
     }
 
     // Utility for generic write lock on the pool
@@ -264,15 +262,13 @@ impl UpstreamPool {
     /// Add a vector of upstream URIs to the pool
     pub async fn add_upstreams(&self, uris: &[Upstream]) {
         let mut guard = self._write_lock().await;
-        let upstreams = guard.deref_mut();
-        upstreams.add_upstreams(uris);
+        (*guard).add_upstreams(uris);
     }
 
     /// Remove a vector of URIs from the pool
     pub async fn remove_uris(&self, uris: &[String]) {
         let mut guard = self._write_lock().await;
-        let upstreams = guard.deref_mut();
-        upstreams.remove_uris(uris);
+        (*guard).remove_uris(uris);
     }
 }
 
@@ -480,11 +476,11 @@ impl Pool {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = self.pool.iter().map(|s| s.uri.clone()).collect();
 
-        // Push new upstream instance
-        for upstream in upstreams {
-            if uri_set.contains(&upstream.uri) {
-                continue;
-            }
+        // Limit to only URIs that don't exist in the pool already
+        let new_upstreams = upstreams.iter().filter(|u| !uri_set.contains(&u.uri));
+
+        // Add new upstream instances to the pool
+        for upstream in new_upstreams {
             self.pool
                 .push(UpstreamServer::new(self.next_id, upstream.clone()));
             self.next_id += 1;

@@ -1,14 +1,20 @@
-use axum::extract::State;
-use axum::response::sse::{Event as SSEvent, KeepAlive, Sse};
-use axum::response::{IntoResponse, Response};
-use axum::{routing::get, Json, Router};
+use axum::{
+    extract::State, response::{
+        sse::{Event as SSEvent, KeepAlive, Sse}, IntoResponse,
+        Response,
+    },
+    routing::get,
+    Json,
+    Router,
+};
 use futures_util::stream::Stream;
-use http::header::CONTENT_TYPE;
-use http::{HeaderValue, StatusCode};
+use http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
 use std::convert::Infallible;
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt as _;
+use tokio_stream::{
+    wrappers::errors::BroadcastStreamRecvError, wrappers::BroadcastStream, StreamExt,
+};
+use tower_cookies::CookieManagerLayer;
+use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::error;
 
@@ -24,10 +30,11 @@ use crate::stream::debounce;
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 #[cfg(debug_assertions)]
 use http::Method;
+
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
 
-pub fn router<T>(state: AppState) -> Router<T> {
+pub fn router(state: AppState) -> Router {
     // Support static file handling from /static directory that is embedded in the final binary
     let static_service = ServeDir::new(&STATIC_ASSETS_DIR);
 
@@ -63,7 +70,11 @@ pub fn router<T>(state: AppState) -> Router<T> {
         router = router.layer(cors_layer);
     }
 
-    router.with_state(state.clone())
+    router
+        .with_state(state.clone())
+        .layer(CookieManagerLayer::new())
+        .layer(RequestDecompressionLayer::new())
+        .layer(CompressionLayer::new())
 }
 
 async fn read_health() -> impl IntoResponse {

@@ -1,11 +1,12 @@
 use async_stream::stream;
 use futures_util::{pin_mut, Stream, StreamExt};
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::hash::Hash;
-use std::time::{Duration, Instant};
-use tokio::select;
-use tokio::time::sleep_until;
+use std::{
+    collections::HashSet,
+    fmt::Debug,
+    hash::Hash,
+    time::{Duration, Instant},
+};
+use tokio::{select, time::sleep_until};
 
 pub fn debounce<S>(duration: Duration, stream: S) -> impl Stream<Item = S::Item>
 where
