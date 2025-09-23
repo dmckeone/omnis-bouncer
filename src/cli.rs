@@ -20,6 +20,8 @@ pub struct Cli {
 pub enum Commands {
     /// Run the server
     Run(RunArgs),
+    /// Generate a random cookie key in Base64 format
+    GenerateKey,
     /// Emit bundled self-signed CA certificate for testing with HTTPS
     ExportAuthority(ExportAuthorityArgs),
 }

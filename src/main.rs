@@ -26,7 +26,9 @@ use tracing::{error, info, Level};
 use crate::certs::{write_pem, write_pfx};
 use crate::cli::{parse_cli, Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs};
 use crate::config::Config;
+use crate::secrets::encode_master_key;
 
+/// Main entry point for app
 fn main() {
     // Initialize tracing
     tracing_subscriber::fmt()
@@ -39,11 +41,13 @@ fn main() {
     let cli = parse_cli();
     match &cli.command {
         Some(Commands::Run(args)) => run_server(args),
+        Some(Commands::GenerateKey) => generate_cookie_master_key(),
         Some(Commands::ExportAuthority(args)) => write_certs(args),
         None => {}
     }
 }
 
+/// Run the main server
 fn run_server(args: &RunArgs) {
     // Build config
     let config = match Config::try_from(args) {
@@ -79,6 +83,14 @@ fn run_server(args: &RunArgs) {
     info!("Shutdown complete");
 }
 
+/// Generate a cookie master key that can be used to encode cookies
+fn generate_cookie_master_key() {
+    let key = axum_extra::extract::cookie::Key::generate();
+    let encoded = encode_master_key(key);
+    println!("\nCookie Key (base64): {}\n", encoded);
+}
+
+/// Write out the Certificate Authority public cert for https:// testing
 fn write_certs(args: &ExportAuthorityArgs) {
     match &args.command {
         Some(ExportAuthorityCommands::Pfx { path }) => write_pfx(Path::new(path)),
