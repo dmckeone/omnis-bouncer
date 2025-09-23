@@ -1,5 +1,6 @@
 import {defineStore} from 'pinia'
 import {ref} from "vue";
+import {useTitle} from '@vueuse/core'
 
 import {API_URI} from '@/constants';
 
@@ -18,6 +19,8 @@ interface QueueStatus {
 const INTERESTING_EVENTS_RE = /^(settings|queue|store):/i;
 
 export const useQueueStatus = defineStore('queue', () => {
+    const title = useTitle("");
+
     const info = ref<AppInfo>({
         name: "Omnis Bouncer"
     });
@@ -44,6 +47,7 @@ export const useQueueStatus = defineStore('queue', () => {
             const response = await fetch(uri)
             if (response.status == 200) {
                 info.value = await response.json()
+                title.value = info.value.name;
             }
         } catch (e) {
             console.log(`Error querying ${uri}: ${e}`)
