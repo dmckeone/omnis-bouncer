@@ -34,10 +34,13 @@ tower-http = { version = "0.6", features = ["auth", "cors", "compression-full", 
 tower-serve-static = { version = "0.1", features = ["metadata"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
+utoipa = { version = "5.4", features = ["axum_extras", "chrono", "config", "decimal", "openapi_extensions", "preserve_order", "uuid", "url", "yaml"] }
+utoipa-axum = "0.2"
+utoipa-redoc = { version = "6.0", features = ["axum"] }
+utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 uuid = { version = "1.18", features = ["fast-rng", "v4"] }
 
 [build-dependencies]
-npm_rs = "1.0"
 build-deps = "0.1"
 
 [dev-dependencies]
