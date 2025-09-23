@@ -2,7 +2,7 @@ use std::{ops::Deref, sync::Arc};
 use tokio::sync::Notify;
 
 use crate::config::Config;
-use crate::queue::{QueueControl, QueueSubscriber};
+use crate::queue::{QueueControl, QueueEvents};
 use crate::upstream::UpstreamPool;
 
 // Our app state type
@@ -13,7 +13,7 @@ pub struct State {
     pub config: Config,
     pub shutdown_notifier: Arc<Notify>,
     pub queue: QueueControl,
-    pub queue_subscriber: QueueSubscriber,
+    pub queue_events: QueueEvents,
     pub upstream_pool: UpstreamPool,
     pub http_client: reqwest::Client,
 }
@@ -23,17 +23,17 @@ impl AppState {
         config: Config,
         shutdown_notifier: Arc<Notify>,
         queue: QueueControl,
-        queue_subscriber: QueueSubscriber,
+        queue_events: QueueEvents,
         upstream_pool: UpstreamPool,
-        client: reqwest::Client,
+        http_client: reqwest::Client,
     ) -> Self {
         Self(Arc::new(State {
             config,
             shutdown_notifier,
             queue,
-            queue_subscriber,
+            queue_events,
             upstream_pool,
-            http_client: client,
+            http_client,
         }))
     }
 }

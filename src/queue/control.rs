@@ -45,18 +45,20 @@ lazy_static! {
 }
 
 #[derive(Debug, Clone)]
-pub struct QueueSubscriber {
-    redis_subscriber: RedisSubscriber,
+pub struct QueueEvents {
+    subscriber: RedisSubscriber,
 }
 
-impl QueueSubscriber {
+impl QueueEvents {
     pub async fn from_client(
         client: redis::Client,
-        channel_name: String,
+        prefix: impl Into<String>,
         cancel: Arc<Notify>,
     ) -> Result<Self> {
+        let prefix = prefix.into();
+        let channel_name = format!("{}:events", prefix);
         Ok(Self {
-            redis_subscriber: RedisSubscriber::from_client(client, channel_name, cancel).await?,
+            subscriber: RedisSubscriber::from_client(client, channel_name, cancel).await?,
         })
     }
 
@@ -84,7 +86,7 @@ impl QueueSubscriber {
 
     /// Convert the subscriber into a stream
     pub fn into_stream(self) -> impl Stream<Item = QueueEvent> {
-        let broadcast_stream = self.redis_subscriber.stream();
+        let broadcast_stream = self.subscriber.stream();
         let queue_event_stream = broadcast_stream.filter_map(Self::stream_filter);
 
         // Deduplicate events across a period of time
@@ -157,17 +159,6 @@ impl QueueControl {
         Ok(())
     }
 
-    pub async fn subscriber(
-        client: redis::Client,
-        prefix: impl Into<String>,
-        cancel: Arc<Notify>,
-    ) -> Result<QueueSubscriber> {
-        let prefix = prefix.into();
-        let channel_name = format!("{}:events", prefix);
-        let subscriber = QueueSubscriber::from_client(client, channel_name, cancel).await?;
-        Ok(subscriber)
-    }
-
     // Create a new ID for use in the Queue
     pub fn new_id(&self) -> Uuid {
         Uuid::new_v4()
@@ -201,11 +192,12 @@ impl QueueControl {
             }
         }
 
+        // Publish event to Redis
         let string_event = String::from(event.clone());
-        if let Err(error) = conn
+        let result = conn
             .publish(format!("{}:events", prefix), string_event)
-            .await
-        {
+            .await;
+        if let Err(error) = result {
             error!("Failed to send \"{:?}\": {:?}", event, error);
         }
 

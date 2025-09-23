@@ -158,7 +158,7 @@ async fn server_sent_events(
     let state = state.clone();
 
     // Create stream of Queue events
-    let subscriber = state.queue_subscriber.clone();
+    let subscriber = state.queue_events.clone();
     let stream = subscriber.into_stream();
 
     // Translate into a public facing API and create Serve Sent Event

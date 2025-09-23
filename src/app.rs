@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::background::run as background_run;
 use crate::config::Config;
 use crate::database::{create_redis_client, create_redis_pool};
-use crate::queue::QueueControl;
+use crate::queue::{QueueControl, QueueEvents};
 use crate::servers::{redirect_http_to_https, secure_server};
 use crate::signals::shutdown_signal;
 use crate::state::AppState;
@@ -68,7 +68,7 @@ pub async fn run(
 
     // Create queue subscriber, for emitted events
     let queue_subscriber =
-        match QueueControl::subscriber(redis_client, &config.queue_prefix, stream_notify.clone())
+        match QueueEvents::from_client(redis_client, &config.queue_prefix, stream_notify.clone())
             .await
         {
             Ok(s) => s,
