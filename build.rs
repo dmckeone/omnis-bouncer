@@ -15,14 +15,12 @@ fn main() {
     let ui_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd")
-            .env("VITE_API_URI", "/")
             .current_dir(&ui_dir)
             .args(["/C", "pnpm run build"])
             .output()
             .expect("failed to build user interface with pnpm")
     } else {
         Command::new("sh")
-            .env("VITE_API_URI", "/")
             .current_dir(&ui_dir)
             .arg("-c")
             .arg("pnpm run build")

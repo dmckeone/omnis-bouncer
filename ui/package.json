@@ -1,17 +1,17 @@
 {
-  "name": "controlui",
-  "version": "0.0.0",
+  "name": "omnis-bouncer-ui",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "cross-env VITE_API_URI=https://127.0.0.1:2999/ vite",
     "build": "run-p type-check \"build-only {@}\" --",
     "preview": "vite preview",
     "test": "vitest",
-    "build-only": "vite build",
+    "build-only": "cross-env VITE_API_URI=/ vite build",
     "type-check": "vue-tsc --build",
     "lint": "eslint . --fix",
     "format": "prettier --write src/"
@@ -36,6 +36,7 @@
     "@vue/eslint-config-typescript": "^14.6.0",
     "@vue/test-utils": "^2.4.6",
     "@vue/tsconfig": "^0.7.0",
+    "cross-env": "^10.0.0",
     "daisyui": "^5.1.13",
     "eslint": "^9.31.0",
     "eslint-plugin-vue": "~10.3.0",
