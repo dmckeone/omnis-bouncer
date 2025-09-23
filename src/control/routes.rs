@@ -21,15 +21,18 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
+use crate::constants::{
+    AUTHORITY_CERT, AUTHORITY_PFX, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX,
+};
 use crate::control::models::{Config, Event, Settings, SettingsPatch, Status};
-use crate::errors::Result;
+use crate::errors::{Error, Result};
 use crate::queue::StoreCapacity;
 use crate::signals::cancellable;
 use crate::state::AppState;
 
 #[cfg(debug_assertions)]
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
+use crate::secrets::encode_master_key;
 #[cfg(debug_assertions)]
 use http::Method;
 #[cfg(debug_assertions)]
@@ -99,6 +102,9 @@ pub fn router(state: AppState) -> Router {
     let openapi_router = OpenApiRouter::with_openapi(openapi)
         .routes(routes!(get_health))
         .routes(routes!(get_config))
+        .routes(routes!(get_cookie_key))
+        .routes(routes!(get_authority_pfx))
+        .routes(routes!(get_authority_pem))
         .routes(routes!(get_status))
         .routes(routes!(get_settings, patch_settings))
         .routes(routes!(get_server_sent_events))
@@ -194,6 +200,53 @@ async fn get_config(State(state): State<AppState>) -> Result<Json<Config>> {
     let config = &state.config;
     let config = Config::from(config);
     Ok(Json(config))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/generate_key",
+    tag = "server",
+    summary = "Generate Key",
+    description = "Generate a new random master key (encoded in base64) for encrypting cookies with the queue",
+    responses(
+        (status = 200, description = "OK", body = String, example = "gMibBfGYrLYDNqNyXva2j9T9DV0AX6LkxDy3xGm8fLgS0rIdezup5IJN/RDq0ekmHlN6dLBltGUwDtCS7GA27A==")
+    )
+)]
+async fn get_cookie_key() -> Result<String> {
+    let key = axum_extra::extract::cookie::Key::generate();
+    let encoded = encode_master_key(key);
+    Ok(encoded)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/certs/ca.pfx",
+    tag = "server",
+    summary = "Self-Signed CA Authority (.pfx)",
+    description = "Download the certificate authority used for bundled self-signed certificates in Personal Information Exchange (PFX) format",
+    responses(
+        (status = 200, description = "OK", body = Vec<u8>)
+    )
+)]
+async fn get_authority_pfx() -> Result<Vec<u8>> {
+    Ok(AUTHORITY_PFX.to_vec())
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/certs/ca.pem",
+    tag = "server",
+    summary = "Self-Signed CA Authority (.pem)",
+    description = "Download the certificate authority used for bundled self-signed certificates in Privacy-Enhanced Mail (PEM) format",
+    responses(
+        (status = 200, description = "OK", body = String)
+    )
+)]
+async fn get_authority_pem() -> Result<String> {
+    match String::from_utf8(AUTHORITY_CERT.to_vec()) {
+        Ok(authority_pem) => Ok(authority_pem),
+        Err(error) => Err(Error::Unknown(error.into())),
+    }
 }
 
 #[utoipa::path(
