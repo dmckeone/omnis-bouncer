@@ -18,6 +18,17 @@ pub static UI_FAVICON: &[u8] =
     include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/ui/dist/favicon.ico"));
 pub static UI_ASSET_DIR: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/ui/dist/assets");
 
+// CA certs
+pub static AUTHORITY_CERT: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/certs/self_authority/root.crt"
+));
+
+pub static AUTHORITY_PFX: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/certs/self_authority/root.pfx"
+));
+
 // Self-signed certs
 pub static SELF_SIGNED_CERT: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),

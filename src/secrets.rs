@@ -2,8 +2,10 @@ use axum_extra::extract::cookie::Key as PrivateCookieKey;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
+use crate::errors::Result;
+
 /// Decode a master key in base64 into an Axum cookie key
-pub fn decode_master_key(master_key: impl Into<String>) -> anyhow::Result<PrivateCookieKey> {
+pub fn decode_master_key(master_key: impl Into<String>) -> Result<PrivateCookieKey> {
     let master_key = master_key.into();
     match STANDARD.decode(master_key) {
         Ok(k) => Ok(PrivateCookieKey::derive_from(k.as_slice())),

@@ -99,8 +99,8 @@ pub struct QueueControl {
     quarantine_expiry: Duration,
     validated_expiry: Duration,
     scripts: Scripts,
+    publish_throttle: Duration,
     throttle_buffer: RwLock<HashMap<QueueEvent, Instant>>,
-    emit_throttle: Duration,
     waiting_page_cache: RwLock<HashMap<String, String>>,
 }
 
@@ -109,15 +109,15 @@ impl QueueControl {
         pool: RedisPool,
         quarantine_expiry: Duration,
         validated_expiry: Duration,
-        emit_throttle: Duration,
+        publish_throttle: Duration,
     ) -> Result<Self> {
         let queue = Self {
             pool,
             quarantine_expiry,
             validated_expiry,
             scripts: Scripts::new()?,
+            publish_throttle,
             throttle_buffer: RwLock::new(HashMap::new()),
-            emit_throttle,
             waiting_page_cache: RwLock::new(HashMap::new()),
         };
 
@@ -185,7 +185,7 @@ impl QueueControl {
             let instant = (*guard).get(&event);
 
             if let Some(instant) = instant
-                && now.duration_since(*instant) < self.emit_throttle
+                && now.duration_since(*instant) < self.publish_throttle
             {
                 // EARLY EXIT: Event was already emitted recently
                 return;
@@ -211,7 +211,7 @@ impl QueueControl {
     pub async fn flush_event_throttle_buffer(&self, now: Option<Instant>) {
         let mut guard = self.throttle_buffer.write().await;
         let now = now.unwrap_or(Instant::now());
-        (*guard).retain(|_, instant| now.duration_since(*instant) < self.emit_throttle);
+        (*guard).retain(|_, instant| now.duration_since(*instant) < self.publish_throttle);
     }
 
     /// Set the current status of the queue

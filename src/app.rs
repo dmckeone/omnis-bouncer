@@ -44,7 +44,7 @@ pub async fn run(
         redis_pool,
         config.quarantine_expiry,
         config.validated_expiry,
-        config.emit_throttle,
+        config.publish_throttle,
     ) {
         Ok(q) => q,
         Err(e) => {

@@ -1,5 +1,7 @@
 mod app;
 mod background;
+mod certs;
+mod cli;
 mod config;
 mod constants;
 mod control;
@@ -18,11 +20,12 @@ mod waiting_room;
 
 use axum_server::Handle;
 use config::Config;
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 use tokio::sync::Notify;
-use tracing::{info, Level};
+use tracing::{error, info, Level};
 
-use crate::secrets::decode_master_key;
+use crate::certs::{write_pem, write_pfx};
+use crate::cli::{parse_cli, Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs};
 
 fn main() {
     // Initialize tracing
@@ -31,6 +34,25 @@ fn main() {
         .with_target(false)
         .compact()
         .init();
+
+    // Parse CLI arguments
+    let cli = parse_cli();
+    match &cli.command {
+        Some(Commands::Run(args)) => run_server(args),
+        Some(Commands::ExportAuthority(args)) => write_certs(args),
+        None => {}
+    }
+}
+
+fn run_server(args: &RunArgs) {
+    // Build config
+    let config = match Config::try_from(args) {
+        Ok(config) => config,
+        Err(err) => {
+            error!("Failed to read configuration: {:?}", err);
+            return;
+        }
+    };
 
     // Install crypto provider guard (must be early in app startup)
     rustls::crypto::aws_lc_rs::default_provider()
@@ -47,8 +69,6 @@ fn main() {
         .build()
         .expect("Failed to build tokio runtime");
 
-    let config = config();
-
     runtime.block_on(app::run(
         config,
         shutdown_handle,
@@ -59,14 +79,10 @@ fn main() {
     info!("Shutdown complete");
 }
 
-fn config() -> Config {
-    // TODO: Move cookie master key into configuration parsing
-    let base64_master_key =
-        "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ==";
-
-    Config {
-        cookie_secret_key: decode_master_key(base64_master_key)
-            .expect("Failed to decode cookie master key"),
-        ..Config::default()
+fn write_certs(args: &ExportAuthorityArgs) {
+    match &args.command {
+        Some(ExportAuthorityCommands::Pfx { path }) => write_pfx(Path::new(path)),
+        Some(ExportAuthorityCommands::Pem { path }) => write_pem(Path::new(path)),
+        None => {}
     }
 }
