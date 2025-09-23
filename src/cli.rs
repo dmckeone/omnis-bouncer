@@ -396,7 +396,7 @@ pub struct ExportAuthorityArgs {
 pub enum ExportAuthorityCommands {
     /// Export as .pfx in Personal Information Exchange (PFX) format
     Pfx { path: String },
-    /// Export as .crt in Privacy-Enhanced mail (PEM) format
+    /// Export as .crt in Privacy-Enhanced Mail (PEM) format
     Pem { path: String },
 }
 
