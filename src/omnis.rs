@@ -230,7 +230,11 @@ pub async fn omnis_studio_upstream(
         if let Some((waiting_headers, waiting_body)) =
             check_waiting_page(config, &cookies, queue, queue_id).await?
         {
-            return Ok((StatusCode::OK, waiting_headers, waiting_body));
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                waiting_headers,
+                waiting_body,
+            ));
         }
 
         // Strip waiting room cookies if we've arrived in the store
