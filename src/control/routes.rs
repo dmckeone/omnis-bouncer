@@ -24,15 +24,18 @@ use utoipa_swagger_ui::SwaggerUi;
 use crate::constants::{
     AUTHORITY_CERT, AUTHORITY_PFX, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX,
 };
-use crate::control::models::{Config, Event, Settings, SettingsPatch, Status};
+use crate::control::models::{
+    Config, Event, Settings, SettingsPatch, Status, Upstream, UpstreamRemove,
+};
 use crate::errors::{Error, Result};
 use crate::queue::StoreCapacity;
+use crate::secrets::encode_master_key;
 use crate::signals::cancellable;
 use crate::state::AppState;
+use crate::upstream;
 
 #[cfg(debug_assertions)]
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
-use crate::secrets::encode_master_key;
 #[cfg(debug_assertions)]
 use http::Method;
 #[cfg(debug_assertions)]
@@ -107,6 +110,7 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(get_authority_pem))
         .routes(routes!(get_status))
         .routes(routes!(get_settings, patch_settings))
+        .routes(routes!(get_upstreams, add_upstreams, remove_upstreams))
         .routes(routes!(get_server_sent_events))
         .nest_service("/favicon.ico", favicon_service)
         .nest_service("/static", static_service)
@@ -339,6 +343,78 @@ async fn patch_settings(
 
     let queue_settings = queue.queue_settings(config.queue_prefix.clone()).await?;
     Ok(Json(Settings::from(queue_settings)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/upstreams",
+    tag = "queue",
+    summary = "Upstream Servers",
+    description = "List of all currently active upstream servers",
+    responses(
+        (status = 200, description = "OK", body = Vec<Upstream>)
+    )
+)]
+async fn get_upstreams(State(state): State<AppState>) -> Json<Vec<Upstream>> {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+    Json(
+        upstream_pool
+            .upstreams()
+            .await
+            .iter()
+            .map(Upstream::from)
+            .collect(),
+    )
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/upstreams",
+    tag = "queue",
+    summary = "Add Upstream Servers",
+    description = "Add one or more upstream Omnis Studio servers",
+    request_body = Upstream,
+    responses(
+        (status = 201, description = "Created")
+    )
+)]
+async fn add_upstreams(
+    State(state): State<AppState>,
+    Json(upstreams): Json<Vec<Upstream>>,
+) -> StatusCode {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+
+    let upstreams: Vec<upstream::Upstream> =
+        upstreams.iter().map(upstream::Upstream::from).collect();
+    upstream_pool.add_upstreams(&upstreams).await;
+
+    StatusCode::CREATED
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/upstreams",
+    tag = "queue",
+    summary = "Remove Upstream Servers",
+    description = "Remove one or more upstream Omnis Studio servers",
+    request_body = UpstreamRemove,
+    responses(
+        (status = 200, description = "OK")
+    )
+)]
+async fn remove_upstreams(
+    State(state): State<AppState>,
+    Json(upstreams): Json<Vec<UpstreamRemove>>,
+) -> StatusCode {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+
+    let upstreams: Vec<String> = upstreams.iter().map(|u| u.uri.clone()).collect();
+    upstream_pool.remove_uris(&upstreams).await;
+
+    StatusCode::OK
 }
 
 #[utoipa::path(

@@ -29,6 +29,16 @@ impl Upstream {
     }
 }
 
+impl From<&UpstreamServer> for Upstream {
+    fn from(upstream_server: &UpstreamServer) -> Self {
+        Self {
+            uri: upstream_server.uri.clone(),
+            connections: upstream_server.max_connections,
+            sticky_sessions: upstream_server.max_sticky_sessions,
+        }
+    }
+}
+
 /// Guard that contains the locked URI that can be used for a single reverse proxy call,
 /// when the guard is dropped, the permit for that URI is dropped along with it.
 pub struct ConnectionPermit {
@@ -249,9 +259,9 @@ impl UpstreamPool {
     }
 
     /// Return a vector of tuples with the ID and URI of all active pool URIs
-    pub async fn current_uris(&self) -> Vec<(usize, String)> {
+    pub async fn upstreams(&self) -> Vec<Upstream> {
         let guard = self._read_lock().await;
-        (*guard).current_uris()
+        (*guard).upstreams()
     }
 
     // Utility for generic write lock on the pool
@@ -260,13 +270,13 @@ impl UpstreamPool {
     }
 
     /// Add a vector of upstream URIs to the pool
-    pub async fn add_upstreams(&self, uris: &[Upstream]) {
+    pub async fn add_upstreams(&self, uris: &Vec<Upstream>) {
         let mut guard = self._write_lock().await;
         (*guard).add_upstreams(uris);
     }
 
     /// Remove a vector of URIs from the pool
-    pub async fn remove_uris(&self, uris: &[String]) {
+    pub async fn remove_uris(&self, uris: &Vec<String>) {
         let mut guard = self._write_lock().await;
         (*guard).remove_uris(uris);
     }
@@ -463,16 +473,16 @@ impl Pool {
     }
 
     /// vector of all current IDs and URIs in the pool
-    fn current_uris(&self) -> Vec<(usize, String)> {
+    fn upstreams(&self) -> Vec<Upstream> {
         self.pool
             .iter()
             .filter(|u| !u.removed)
-            .map(|u| (u.id, u.uri.clone()))
+            .map(Upstream::from)
             .collect()
     }
 
     /// Add 1+ URIs to the upstream pool
-    fn add_upstreams(&mut self, upstreams: &[Upstream]) {
+    fn add_upstreams(&mut self, upstreams: &Vec<Upstream>) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = self.pool.iter().map(|s| s.uri.clone()).collect();
 
@@ -488,7 +498,7 @@ impl Pool {
     }
 
     /// Remove 1+ of URIs from the service
-    fn remove_uris(&mut self, uris: &[String]) {
+    fn remove_uris(&mut self, uris: &Vec<String>) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = uris.iter().cloned().collect();
 

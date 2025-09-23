@@ -88,9 +88,7 @@ pub async fn run(
         .expect("Failed to build HTTP client");
 
     let upstream_pool = UpstreamPool::new(config.sticky_session_timeout);
-    upstream_pool
-        .add_upstreams(config.initial_upstream.as_slice())
-        .await;
+    upstream_pool.add_upstreams(&config.initial_upstream).await;
 
     let public_tls_pair = config.public_tls_pair.clone();
     let public_tls = RustlsConfig::from_pem(public_tls_pair.0, public_tls_pair.1)

@@ -28,6 +28,26 @@ impl From<&upstream::Upstream> for Upstream {
     }
 }
 
+impl From<&Upstream> for upstream::Upstream {
+    fn from(upstream: &Upstream) -> Self {
+        Self {
+            uri: upstream.uri.clone(),
+            connections: upstream.connections,
+            sticky_sessions: upstream.sticky_sessions,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[schema(
+    examples(
+        json!({"uri": "http://127.0.0.1:63111"})
+    )
+)]
+pub struct UpstreamRemove {
+    pub(crate) uri: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[schema(
     examples(

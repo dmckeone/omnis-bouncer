@@ -25,6 +25,7 @@ use crate::queue::scripts::{
     waiting_page_key, Scripts,
 };
 use crate::stream::debounce;
+use crate::upstream::Upstream;
 
 lazy_static! {
     static ref minfiy_cfg: Cfg = Cfg {
