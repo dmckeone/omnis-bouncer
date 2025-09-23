@@ -4,7 +4,7 @@ use tracing::error;
 use crate::constants::{AUTHORITY_CERT, AUTHORITY_PFX};
 
 fn write_file(source: &[u8], destination: &Path) {
-    let mut file = match File::create(&destination) {
+    let mut file = match File::create(destination) {
         Ok(file) => file,
         Err(error) => {
             error!("Failed to create path \"{:?}\": {:?}", destination, error);
@@ -21,7 +21,7 @@ pub fn write_pfx(path: &Path) {
         error!("File already exists: {}", path.display());
         return;
     }
-    write_file(&AUTHORITY_PFX, path);
+    write_file(AUTHORITY_PFX, path);
 }
 
 pub fn write_pem(path: &Path) {
@@ -29,5 +29,5 @@ pub fn write_pem(path: &Path) {
         error!("File already exists: {}", path.display());
         return;
     }
-    write_file(&AUTHORITY_CERT, path);
+    write_file(AUTHORITY_CERT, path);
 }

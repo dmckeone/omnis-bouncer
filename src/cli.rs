@@ -15,6 +15,7 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Commands {
     /// Run the server
@@ -342,7 +343,7 @@ impl TryFrom<&RunArgs> for Config {
                 None => axum_extra::extract::cookie::Key::generate(),
             },
             redis_uri: args.redis_uri.clone(),
-            initial_upstream: build_upstream(&args),
+            initial_upstream: build_upstream(args),
             public_tls_pair: build_tls_pair(
                 args.public_tls_certificate_path.clone(),
                 args.public_tls_key_path.clone(),
