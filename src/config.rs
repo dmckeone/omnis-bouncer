@@ -35,6 +35,7 @@ pub struct Config {
     pub quarantine_expiry: Duration,
     pub validated_expiry: Duration,
     pub emit_throttle: Duration,
+    pub queue_rotation_enabled: bool,
 }
 
 impl Default for Config {
@@ -69,6 +70,7 @@ impl Default for Config {
             quarantine_expiry: Duration::from_secs(45),
             validated_expiry: Duration::from_secs(600),
             emit_throttle: Duration::from_millis(100),
+            queue_rotation_enabled: true,
         }
     }
 }

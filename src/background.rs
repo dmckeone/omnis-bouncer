@@ -34,30 +34,32 @@ async fn web_tasks(state: AppState) {
 
 /// Queue
 async fn queue_tasks(state: AppState) {
+    // Flush all emit buffer entries
+    state.queue.flush_event_throttle_buffer(None).await;
+
     // Verify waiting page
     state
         .queue
         .verify_waiting_page(state.config.queue_prefix.clone())
         .await;
 
-    // Flush all emit buffer entries
-    state.queue.flush_event_throttle_buffer(None).await;
+    if state.config.queue_rotation_enabled {
+        // Queue rotation
+        let result = state
+            .queue
+            .rotate_full(state.config.queue_prefix.clone(), None)
+            .await;
 
-    // Queue rotation
-    let result = state
-        .queue
-        .rotate_full(state.config.queue_prefix.clone(), None)
-        .await;
-
-    match result {
-        Ok(rotate) => {
-            if rotate.has_changes() {
-                info!(
-                    "Queue rotation -- queue expired: {}  store expired: {}  promoted: {}",
-                    rotate.queue_expired, rotate.store_expired, rotate.promoted
-                )
+        match result {
+            Ok(rotate) => {
+                if rotate.has_changes() {
+                    info!(
+                        "Queue rotation -- queue expired: {}  store expired: {}  promoted: {}",
+                        rotate.queue_expired, rotate.store_expired, rotate.promoted
+                    )
+                }
             }
+            Err(e) => error!("Failed to rotate queue: {:?}", e),
         }
-        Err(e) => error!("Failed to rotate queue: {:?}", e),
     }
 }
