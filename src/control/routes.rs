@@ -143,7 +143,7 @@ pub fn router(state: AppState) -> Router {
     // Merge OpenAPI spec into routing
     router = router
         .merge(SwaggerUi::new("/swagger").url("/openapi.json", api.clone()))
-        .merge(Redoc::with_url("/redoc", api))
+        .merge(Redoc::with_url("/docs", api))
         .fallback(control_ui_handler);
 
     #[cfg(debug_assertions)]
