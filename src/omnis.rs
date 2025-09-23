@@ -303,22 +303,6 @@ pub async fn omnis_studio_upstream(
     Ok((response_status, response_headers, response_body))
 }
 
-fn is_html_page(headers: &HeaderMap, path: &str) -> bool {
-    // Parse Accept header to see if the client is requesting HTML
-    let requires_html = match headers.get(ACCEPT) {
-        Some(v) => match v.to_str() {
-            Ok(s) => match Mime::from_str(s) {
-                Ok(m) => m.essence() == "text/html",
-                Err(_) => false,
-            },
-            Err(_) => false,
-        },
-        None => false,
-    };
-
-    requires_html || HTML_RE.is_match(path)
-}
-
 fn is_static_asset(path: &str) -> bool {
     FAVICON_RE.is_match(path) || ASSET_RE.is_match(path)
 }
@@ -358,7 +342,7 @@ impl ConnectionType {
         } else if is_ultra_thin(path) {
             // Ultra-thin can't make any assumptions about the content, so we have to guess
             // that the page will be HTML
-            if method == Method::GET && is_html_page(headers, path) {
+            if method == Method::GET {
                 ConnectionType::Regular(WaitingRoom::Required)
             } else {
                 ConnectionType::Regular(WaitingRoom::Skip)

@@ -217,7 +217,7 @@ pub struct RunArgs {
     /// Number of requests per second that can be received for the API server before being rate limited
     #[arg(
         long,
-        default_value = "10",
+        default_value = "5",
         env = "OMNIS_BOUNCER_API_RATE_LIMIT_PER_SEC"
     )]
     pub api_rate_limit_per_sec: u64,
@@ -225,7 +225,7 @@ pub struct RunArgs {
     /// Number of requests per second that can be received for the Ultra-thin server before being rate limited
     #[arg(
         long,
-        default_value = "10",
+        default_value = "0",
         env = "OMNIS_BOUNCER_ULTRA_THIN_RATE_LIMIT_PER_SEC"
     )]
     pub ultra_rate_limit_per_sec: u64,
