@@ -7,22 +7,31 @@ import {POWER_ICON, STORE_ICON, SWITCH_ICON, WAITING_ROOM_ICON} from "@/icons.ts
 import {computed} from "vue";
 
 const store = useQueueStatus();
-const {info, status} = storeToRefs(store);
-const enabled_description = computed(() => status.value.queue_enabled ? 'On' : 'Off');
+const {config, status} = storeToRefs(store);
+const enabled_description = computed(() => {
+  if (status.value != null) {
+    return status.value.queue_enabled ? 'On' : 'Off';
+  } else {
+    return null;
+  }
+});
 </script>
 
 <template>
   <div class="min-h-screen">
     <div class="navbar bg-base-100 shadow-sm">
       <div class="flex-1">
-        <a class="btn btn-ghost text-xl">{{ info.name }}</a>
+        <a v-if="config != null" class="btn btn-ghost text-xl">{{ config?.name }}</a>
       </div>
     </div>
     <div class="flex fixed w-screen">
-      <StatGroup class="flex-auto m-5 max-w-3xl">
+      <StatGroup v-if="status != null" class="flex-auto m-5 max-w-3xl">
         <StatPanel title="Queue Enabled"
                    :value="enabled_description"
-                   :class="{ 'text-success': status.queue_enabled, 'text-error': !status.queue_enabled }"
+                   :class="{
+                     'text-success': status.queue_enabled,
+                     'text-error': !status.queue_enabled
+                   }"
         >
           <template #figure>
             <div v-html="POWER_ICON"/>

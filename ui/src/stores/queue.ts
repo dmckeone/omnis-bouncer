@@ -52,43 +52,8 @@ const INTERESTING_EVENTS_RE = /^(settings|queue|store):/i;
 
 export const useQueueStatus = defineStore('queue', () => {
     const title = useTitle("");
-
-    const config = ref<AppInfo>({
-        name: "Omnis Bouncer",
-        redis_uri: "redis://127.0.0.1:6379",
-        config_upstream: [{uri: "http://127.0.0.1:63111", connections: 100, sticky_sessions: 10}],
-        id_cookie_name: "omnis-bouncer-id",
-        position_cookie_name: "omnis-bouncer-queue-position",
-        queue_size_cookie_name: "omnis-bouncer-queue-size",
-        position_http_header: "x-omnis-bouncer-queue-position",
-        queue_size_http_header: "x-omnis-bouncer-queue-size",
-        acquire_timeout: 10,
-        connect_timeout: 10,
-        cookie_id_expiration: 86400,
-        sticky_session_timeout: 600,
-        asset_cache_secs: 60,
-        buffer_connections: 1000,
-        js_client_rate_limit_per_sec: 0,
-        api_rate_limit_per_sec: 10,
-        ultra_rate_limit_per_sec: 10,
-        public_http_port: 3000,
-        public_https_port: 3001,
-        monitor_https_port: 2999,
-        queue_enabled: true,
-        queue_rotation_enabled: true,
-        store_capacity: 5,
-        redis_prefix: "omnis_bouncer",
-        quarantine_expiry: 45,
-        validated_expiry: 600,
-        publish_throttle: 0,
-    });
-
-    const status = ref<QueueStatus>({
-        queue_enabled: false,
-        store_capacity: 0,
-        queue_size: 0,
-        store_size: 0,
-    })
+    const config = ref<AppInfo | null>(null);
+    const status = ref<QueueStatus | null>(null)
 
     let fetchingInfo = false;
     const fetchInfo = async () => {
@@ -105,7 +70,9 @@ export const useQueueStatus = defineStore('queue', () => {
             const response = await fetch(uri)
             if (response.status == 200) {
                 config.value = await response.json()
-                title.value = config.value.name;
+                if (config.value != null) {
+                    title.value = config.value.name;
+                }
             }
         } catch (e) {
             console.log(`Error querying ${uri}: ${e}`)
@@ -154,5 +121,5 @@ export const useQueueStatus = defineStore('queue', () => {
         }
     }
 
-    return {info: config, status};
+    return {config: config, status};
 })

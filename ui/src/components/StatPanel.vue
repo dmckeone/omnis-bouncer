@@ -8,11 +8,10 @@ const slots = defineSlots<{
 const props = withDefaults(
     defineProps<{
       title?: string
-      value?: boolean | number | string | ComputedRef<boolean | number | string>
+      value?: boolean | number | string | null | ComputedRef<boolean | number | string | null>
     }>(),
     {
-      title: "Stat",
-      value: 0
+      title: "Stat"
     }
 )
 </script>
@@ -23,7 +22,7 @@ const props = withDefaults(
       <slot name="figure" v-bind="$attrs"/>
     </div>
     <div class="stat-title text-bold">{{ props.title }}</div>
-    <div class="stat-value" v-bind="$attrs">{{ props.value }}</div>
+    <div class="stat-value" v-bind="$attrs">{{ props.value != null ? props.value : "--" }}</div>
     <div class="stat-actions">
       <slot name="actions"/>
     </div>
