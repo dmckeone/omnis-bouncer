@@ -26,6 +26,7 @@ regex = "1.11"
 reqwest = { version = "0.12", features = ["stream", "rustls-tls"] }
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1.47", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tower = { version = "0.5", features = ["buffer", "limit", "load-shed"] }
@@ -34,7 +35,7 @@ tower-http = { version = "0.6", features = ["auth", "cors", "compression-full", 
 tower-serve-static = { version = "0.1", features = ["metadata"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
-utoipa = { version = "5.4", features = ["axum_extras", "chrono", "config", "decimal", "openapi_extensions", "preserve_order", "uuid", "url", "yaml"] }
+utoipa = { version = "5.4", features = ["axum_extras", "chrono", "openapi_extensions", "preserve_order"] }
 utoipa-axum = "0.2"
 utoipa-redoc = { version = "6.0", features = ["axum"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }

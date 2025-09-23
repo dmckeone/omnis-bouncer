@@ -1,22 +1,28 @@
 use axum::{
     extract::State, response::{
-        sse::{Event as SSEvent, KeepAlive, Sse}, IntoResponse,
+        sse::{Event as SSEvent, KeepAlive, Sse},
         Response,
     },
-    routing::get,
     Json,
     Router,
 };
 use futures_util::stream::Stream;
 use http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
+use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tower_serve_static::{File, ServeDir, ServeFile};
+use utoipa::{
+    openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder, openapi::Tag, OpenApi,
+};
+use utoipa_axum::{router::OpenApiRouter, routes};
+use utoipa_redoc::{Redoc, Servable};
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::constants::{STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX};
-use crate::control::models::{Event, Info, Settings, SettingsPatch, Status};
+use crate::control::models::{Config, Event, Settings, SettingsPatch, Status};
 use crate::errors::Result;
 use crate::queue::StoreCapacity;
 use crate::signals::cancellable;
@@ -26,9 +32,53 @@ use crate::state::AppState;
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 #[cfg(debug_assertions)]
 use http::Method;
-
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
+
+#[derive(OpenApi)]
+#[openapi(info(
+    title = "Omnis Bouncer",
+    description = "Omnis Bouncer",
+    license(name = "MIT")
+))]
+pub struct ControlAPI;
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct TagGroup {
+    name: String,
+    tags: Vec<String>,
+}
+
+impl TagGroup {
+    fn new(name: impl Into<String>, tags: Vec<impl Into<String>>) -> Self {
+        let name = name.into();
+        let tags: Vec<String> = tags.into_iter().map(|tag| tag.into()).collect();
+        Self { name, tags }
+    }
+}
+
+fn build_tag(
+    name: impl Into<String>,
+    display_name: impl Into<String>,
+    description: impl Into<String>,
+) -> Tag {
+    let name = name.into();
+    let display_name = display_name.into();
+    let description = description.into();
+
+    let mut tag = TagBuilder::new()
+        .name(name)
+        .description(Some(description))
+        .build();
+
+    let extensions = tag
+        .extensions
+        .get_or_insert(ExtensionsBuilder::new().build());
+
+    extensions.insert(String::from("x-displayName"), display_name.into());
+
+    tag
+}
 
 pub fn router(state: AppState) -> Router {
     // Support static file handling from /static directory that is embedded in the final binary
@@ -41,17 +91,59 @@ pub fn router(state: AppState) -> Router {
     ));
     let asset_service = ServeDir::new(&UI_ASSET_DIR);
 
-    // Reverse proxy app
+    // Create OpenAPI instance
+    let openapi = ControlAPI::openapi();
+
+    // Create OpenAPI router with catalogued routes
     #[allow(unused_mut)]
-    let mut router = Router::new()
-        .route("/health", get(read_health))
-        .route("/api/info", get(read_info))
-        .route("/api/settings", get(read_settings).patch(patch_settings))
-        .route("/api/status", get(read_status))
-        .route("/api/sse", get(server_sent_events))
+    let openapi_router = OpenApiRouter::with_openapi(openapi)
+        .routes(routes!(get_health))
+        .routes(routes!(get_config))
+        .routes(routes!(get_status))
+        .routes(routes!(get_settings, patch_settings))
+        .routes(routes!(get_server_sent_events))
         .nest_service("/favicon.ico", favicon_service)
         .nest_service("/static", static_service)
-        .nest_service("/assets", asset_service)
+        .nest_service("/assets", asset_service);
+
+    // Split newly created routes into the axum::Router and OpenApi parts
+    let (mut router, mut api) = openapi_router.split_for_parts();
+
+    // Add all tags and tag groups
+    api.tags = Some(vec![
+        build_tag(
+            "server",
+            "Server",
+            "Routes for the running state of the server",
+        ),
+        build_tag("queue", "Queue", "Routes for queue management and control"),
+        build_tag(
+            "stream",
+            "Streams",
+            "Routes for streaming data from the server",
+        ),
+        build_tag("ops", "Operations", "Routes for simpler DevOps"),
+    ]);
+
+    let extensions = api
+        .extensions
+        .get_or_insert(ExtensionsBuilder::new().build());
+
+    let queue_groups = [
+        TagGroup::new("server", ["server"].to_vec()),
+        TagGroup::new("queue", ["queue"].to_vec()),
+        TagGroup::new("stream", ["stream"].to_vec()),
+        TagGroup::new("ops", ["ops"].to_vec()),
+    ];
+    extensions.insert(
+        String::from("x-tagGroup"),
+        serde_json::to_value(queue_groups).unwrap(),
+    );
+
+    // Merge OpenAPI spec into routing
+    router = router
+        .merge(SwaggerUi::new("/swagger").url("/openapi.json", api.clone()))
+        .merge(Redoc::with_url("/redoc", api))
         .fallback(control_ui_handler);
 
     #[cfg(debug_assertions)]
@@ -73,22 +165,67 @@ pub fn router(state: AppState) -> Router {
         .layer(CompressionLayer::new())
 }
 
-async fn read_health() -> impl IntoResponse {
-    "ok"
+#[utoipa::path(
+    get,
+    path = "/health",
+    tag = "ops",
+    summary = "Health",
+    description = "Health check for use with telemetry and containers",
+    responses(
+        (status = 200, description = "OK", body = String, example = "ok")
+    )
+)]
+async fn get_health() -> String {
+    String::from("ok")
 }
 
-// Current s + use<>tate of Queue Settings
-async fn read_info(State(state): State<AppState>) -> Result<impl IntoResponse> {
+#[utoipa::path(
+    get,
+    path = "/api/config",
+    tag = "server",
+    summary = "Server Configuration",
+    description = "General configuration of the server",
+    responses(
+        (status = 200, description = "OK", body = Config)
+    )
+)]
+async fn get_config(State(state): State<AppState>) -> Result<Json<Config>> {
     let state = state.clone();
     let config = &state.config;
-    let info = Info {
-        name: config.app_name.clone(),
-    };
-    Ok(Json(info))
+    let config = Config::from(config);
+    Ok(Json(config))
 }
 
-// Current state of Queue Settings
-async fn read_settings(State(state): State<AppState>) -> Result<impl IntoResponse> {
+#[utoipa::path(
+    get,
+    path = "/api/status",
+    tag = "queue",
+    summary = "Queue Status",
+    description = "Status of the queue, combined with settings for easy access",
+    responses(
+        (status = 200, description = "OK", body = Status)
+    )
+)]
+async fn get_status(State(state): State<AppState>) -> Result<Json<Status>> {
+    let state = state.clone();
+    let config = &state.config;
+    let queue = &state.queue;
+
+    let queue_status = queue.queue_status(config.queue_prefix.clone()).await?;
+    Ok(Json(Status::from(queue_status)))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/settings",
+    tag = "queue",
+    summary = "Queue Settings",
+    description = "Queue settings currently in use",
+    responses(
+        (status = 200, description = "OK", body = Settings)
+    )
+)]
+async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings>> {
     let state = state.clone();
     let config = &state.config;
     let queue = &state.queue;
@@ -97,11 +234,21 @@ async fn read_settings(State(state): State<AppState>) -> Result<impl IntoRespons
     Ok(Json(Settings::from(queue_settings)))
 }
 
-/// Update queue settings (enabled and store capacity).  null and missing are treated equivalently
+#[utoipa::path(
+    patch,
+    path = "/api/settings",
+    tag = "queue",
+    summary = "Queue Settings",
+    description = "Alter queue settings.  Missing keys and nil are treated equally, and do not affect the current running state.",
+    request_body = SettingsPatch,
+    responses(
+        (status = 200, description = "OK", body = Settings)
+    )
+)]
 async fn patch_settings(
     State(state): State<AppState>,
     Json(changes): Json<SettingsPatch>,
-) -> Result<impl IntoResponse> {
+) -> Result<Json<Settings>> {
     let state = state.clone();
     let config = &state.config;
     let queue = &state.queue;
@@ -141,18 +288,27 @@ async fn patch_settings(
     Ok(Json(Settings::from(queue_settings)))
 }
 
-// Current State of Queue Status
-async fn read_status(State(state): State<AppState>) -> Result<impl IntoResponse> {
-    let state = state.clone();
-    let config = &state.config;
-    let queue = &state.queue;
+#[utoipa::path(
+    get,
+    path = "/api/sse",
+    tag = "stream",
+    summary = "Server-Sent Events (SSE)",
+    description = "Events pushed from the server to notify UI changes.  All payloads are strings:
+* `settings:updated`
+* `waiting_page:updated`
+* `queue:added`
+* `queue:expired`
+* `store:added`
+* `store:expired`
+* `queue:removed`
 
-    let queue_status = queue.queue_status(config.queue_prefix.clone()).await?;
-    Ok(Json(Status::from(queue_status)))
-}
-
-/// Stream of events occurring in the server
-async fn server_sent_events(
+See [MDN - Using Server Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) for more details\
+    ",
+    responses(
+        (status = 200, description = "OK", body = String, example = "settings:updated")
+    )
+)]
+async fn get_server_sent_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = core::result::Result<SSEvent, Infallible>>> {
     let state = state.clone();
