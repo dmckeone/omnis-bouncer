@@ -19,13 +19,13 @@ mod upstream;
 mod waiting_room;
 
 use axum_server::Handle;
-use config::Config;
 use std::{path::Path, sync::Arc};
 use tokio::sync::Notify;
 use tracing::{error, info, Level};
 
 use crate::certs::{write_pem, write_pfx};
 use crate::cli::{parse_cli, Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs};
+use crate::config::Config;
 
 fn main() {
     // Initialize tracing
