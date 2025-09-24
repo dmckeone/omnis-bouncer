@@ -26,6 +26,67 @@ use crate::state::AppState;
 use crate::upstream::{ConnectionPermit, UpstreamPool};
 use crate::waiting_room::{check_waiting_page, extract_queue_id, QueueId, WaitingRoom};
 
+lazy_static! {
+    static ref ULTRA_THIN_IGNORE: HashSet<HeaderName> = {
+        let mut set = HashSet::new();
+        set.insert(ACCEPT_ENCODING);
+        set.insert(CONTENT_LENGTH);
+        set.insert(CONTENT_ENCODING);
+        set.insert(CONNECTION);
+        set.insert(PROXY_AUTHENTICATE);
+        set.insert(PROXY_AUTHORIZATION);
+        set.insert(TE);
+        set.insert(TRAILER);
+        set.insert(TRANSFER_ENCODING);
+        set.insert(UPGRADE);
+        set.insert(UPGRADE_INSECURE_REQUESTS);
+
+        set
+    };
+    static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
+        let mut set = HashSet::new();
+        set.insert(ACCEPT);
+        set.insert(ACCEPT_ENCODING);
+        set.insert(CONTENT_LENGTH);
+        set.insert(CONTENT_ENCODING);
+        set.insert(CONNECTION);
+        set.insert(PROXY_AUTHENTICATE);
+        set.insert(PROXY_AUTHORIZATION);
+        set.insert(TE);
+        set.insert(TRAILER);
+        set.insert(TRANSFER_ENCODING);
+        set.insert(UPGRADE);
+        set.insert(UPGRADE_INSECURE_REQUESTS);
+
+        set
+    };
+    static ref FAVICON_RE: Regex = RegexBuilder::new(r"^/favicon.ico$")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
+    static ref ASSET_RE: Regex =
+        RegexBuilder::new(r"^/jschtml/(css|fonts|icons|images|scripts|themes)/")
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+    static ref JSCLIENT_RE: Regex = RegexBuilder::new(r"^/(jschtml|jsclient|push)")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
+    static ref RESTAPI_RE: Regex = RegexBuilder::new(r"^/api")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
+    static ref ULTRATHIN_RE: Regex = RegexBuilder::new(r"^/ultra")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
+    static ref HTML_RE: Regex = RegexBuilder::new(r"\.(htm|html)$")
+        .case_insensitive(true)
+        .build()
+        .unwrap();
+}
+
 fn cache_router<T>(state: AppState) -> Router<T> {
     let config = &state.config;
 
@@ -134,51 +195,6 @@ pub fn router(state: AppState) -> Router {
         )
 }
 
-lazy_static! {
-    static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
-        let mut set = HashSet::new();
-        set.insert(ACCEPT);
-        set.insert(ACCEPT_ENCODING);
-        set.insert(CONTENT_LENGTH);
-        set.insert(CONTENT_ENCODING);
-        set.insert(CONNECTION);
-        set.insert(PROXY_AUTHENTICATE);
-        set.insert(PROXY_AUTHORIZATION);
-        set.insert(TE);
-        set.insert(TRAILER);
-        set.insert(TRANSFER_ENCODING);
-        set.insert(UPGRADE);
-        set.insert(UPGRADE_INSECURE_REQUESTS);
-
-        set
-    };
-    static ref FAVICON_RE: Regex = RegexBuilder::new(r"^/favicon.ico$")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref ASSET_RE: Regex =
-        RegexBuilder::new(r"^/jschtml/(css|fonts|icons|images|scripts|themes)/")
-            .case_insensitive(true)
-            .build()
-            .unwrap();
-    static ref JSCLIENT_RE: Regex = RegexBuilder::new(r"^/(jschtml|jsclient|push)")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref RESTAPI_RE: Regex = RegexBuilder::new(r"^/api")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref ULTRATHIN_RE: Regex = RegexBuilder::new(r"^/ultra")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-    static ref HTML_RE: Regex = RegexBuilder::new(r"\.(htm|html)$")
-        .case_insensitive(true)
-        .build()
-        .unwrap();
-}
-
 pub async fn omnis_studio_upstream(
     State(state): State<AppState>,
     method: Method,
@@ -194,7 +210,6 @@ pub async fn omnis_studio_upstream(
     // Clone properties of the request that are used
     let path_and_query = uri.path_and_query().unwrap();
     let path = path_and_query.path();
-    let body_stream = request.into_body().into_data_stream();
 
     // Private Cookies
     let private_cookies = cookies.private(&config.cookie_secret_key);
@@ -207,6 +222,9 @@ pub async fn omnis_studio_upstream(
             axum::body::Body::from("Not Found"),
         ));
     }
+
+    // Clone headers for use with the upstream
+    let mut upstream_headers = headers.clone();
 
     // Extract cookie values
     let connection_permit = if connection_type.requires_waiting_room() {
@@ -236,6 +254,12 @@ pub async fn omnis_studio_upstream(
             ));
         }
 
+        // Add queue_id into the upstream headers
+        upstream_headers.insert(
+            HeaderName::from_lowercase(config.id_upstream_http_header.as_bytes())?,
+            String::from(queue_id).parse()?,
+        );
+
         // Strip waiting room cookies if we've arrived in the store
         cookies.remove(Cookie::from(config.position_cookie_name.clone()));
         cookies.remove(Cookie::from(config.queue_size_cookie_name.clone()));
@@ -257,8 +281,8 @@ pub async fn omnis_studio_upstream(
         .await
     };
 
-    // Process connection permit
-    let upstream_uri = match connection_permit {
+    // Process connection permit to determine upstream URI
+    let mut upstream_uri = match connection_permit {
         Some(guard) => format!("{}{:?}", guard.uri, path_and_query),
         None => {
             return Ok((
@@ -269,12 +293,57 @@ pub async fn omnis_studio_upstream(
         }
     };
 
+    // Ultra-thin has special requirements for headers, as they must be appended on to the POST
+    // body or GET arguments so that Omnis has access to them
+    let body = if is_ultra_thin(path) && config.ultra_thin_inject_headers {
+        let content_type = match headers.get(CONTENT_TYPE) {
+            Some(content_type) => content_type.to_str()?,
+            None => "text/plain",
+        };
+
+        let ultra_thin_headers: Vec<String> = upstream_headers
+            .iter()
+            .filter(|(h, _)| !ULTRA_THIN_IGNORE.contains(*h))
+            .map(|(h, v)| {
+                format!(
+                    "HTTP_{}={}",
+                    h.as_str().to_uppercase().replace("-", "_"),
+                    urlencoding::encode(v.to_str().unwrap())
+                )
+            })
+            .collect();
+
+        if method == Method::GET {
+            upstream_uri = format!("{}&{}", upstream_uri, ultra_thin_headers.join("&"));
+
+            reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+        } else if method == Method::POST && content_type == "application/x-www-form-urlencoded" {
+            // Remove content length header, so we can modify the POST body (reqwest will figure out the new size)
+            upstream_headers.remove(CONTENT_LENGTH);
+
+            // Read the body into a local buffer
+            let mut bytes: Vec<u8> = axum::body::to_bytes(request.into_body(), usize::MAX)
+                .await?
+                .to_vec();
+
+            // Extend the body with the modified headers
+            bytes.extend_from_slice("&".as_bytes());
+            bytes.extend_from_slice(ultra_thin_headers.join("&").as_bytes());
+
+            reqwest::Body::from(bytes)
+        } else {
+            reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+        }
+    } else {
+        reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+    };
+
     // Process Request on Upstream
     let client = &state.http_client;
     let response = client
         .request(method.clone(), upstream_uri.clone())
-        .headers(headers.clone())
-        .body(reqwest::Body::wrap_stream(body_stream))
+        .headers(upstream_headers)
+        .body(body)
         .send()
         .await?;
 

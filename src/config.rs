@@ -14,6 +14,7 @@ pub struct Config {
     pub id_cookie_name: String,
     pub position_cookie_name: String,
     pub queue_size_cookie_name: String,
+    pub id_upstream_http_header: String,
     pub position_http_header: String,
     pub queue_size_http_header: String,
     pub acquire_timeout: Duration,
@@ -35,4 +36,5 @@ pub struct Config {
     pub quarantine_expiry: Duration,
     pub validated_expiry: Duration,
     pub publish_throttle: Duration,
+    pub ultra_thin_inject_headers: bool,
 }

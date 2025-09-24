@@ -160,6 +160,14 @@ pub struct RunArgs {
     )]
     pub queue_size_cookie_name: String,
 
+    /// Name to use for the header that stores the queue ID sent to Omnis Studio
+    #[arg(
+        long,
+        default_value = "x-omnis-bouncer-id",
+        env = "OMNIS_BOUNCER_UPSTREAM_HTTP_HEADER_ID_NAME"
+    )]
+    pub id_upstream_http_header: String,
+
     /// Name to use for the header that stores the queue position
     #[arg(
         long,
@@ -301,6 +309,15 @@ pub struct RunArgs {
         env = "OMNIS_BOUNCER_PUBLISH_THROTTLE_MILLIS"
     )]
     pub publish_throttle: u64,
+
+    /// Convert headers into arguments for Ultra-Thin requests
+    #[arg(
+        long,
+        action = ArgAction::Set,
+        default_value = "true",
+        env = "OMNIS_BOUNCER_ULTRA_THIN_INJECT_HEADERS"
+    )]
+    pub ultra_thin_inject_headers: bool,
 }
 
 // Build upstreams from args
@@ -361,6 +378,7 @@ impl TryFrom<&RunArgs> for Config {
             id_cookie_name: args.id_cookie_name.clone(),
             position_cookie_name: args.position_cookie_name.clone(),
             queue_size_cookie_name: args.queue_size_cookie_name.clone(),
+            id_upstream_http_header: args.id_upstream_http_header.to_lowercase(), // Must be lowercase
             position_http_header: args.position_http_header.to_lowercase(), // Must be lowercase
             queue_size_http_header: args.queue_size_http_header.to_lowercase(), // Must be lowercase
             acquire_timeout: Duration::from_secs(args.acquire_timeout),
@@ -382,6 +400,7 @@ impl TryFrom<&RunArgs> for Config {
             quarantine_expiry: Duration::from_secs(args.quarantine_expiry),
             validated_expiry: Duration::from_secs(args.validated_expiry),
             publish_throttle: Duration::from_millis(args.publish_throttle),
+            ultra_thin_inject_headers: args.ultra_thin_inject_headers,
         };
 
         Ok(config)

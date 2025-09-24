@@ -80,7 +80,6 @@ pub async fn run(
 
     // Create a new http client pool
     let http_client = Client::builder()
-        // .cookie_store(false) -- Disabled by default, unlesss "cookies" feature enabled
         .connect_timeout(config.connect_timeout)
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)

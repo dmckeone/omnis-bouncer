@@ -60,6 +60,7 @@ pub struct Config {
     pub config_upstream: Vec<Upstream>,
     pub id_cookie_name: String,
     pub position_cookie_name: String,
+    pub id_upstream_http_header: String,
     pub queue_size_cookie_name: String,
     pub position_http_header: String,
     pub queue_size_http_header: String,
@@ -82,6 +83,7 @@ pub struct Config {
     pub quarantine_expiry: u64,
     pub validated_expiry: u64,
     pub publish_throttle: u64,
+    pub ultra_thin_inject_headers: bool,
 }
 
 impl From<&config::Config> for Config {
@@ -93,6 +95,7 @@ impl From<&config::Config> for Config {
             id_cookie_name: config.id_cookie_name.clone(),
             position_cookie_name: config.position_cookie_name.clone(),
             queue_size_cookie_name: config.queue_size_cookie_name.clone(),
+            id_upstream_http_header: config.id_upstream_http_header.clone(),
             position_http_header: config.position_http_header.clone(),
             queue_size_http_header: config.queue_size_http_header.clone(),
             acquire_timeout: config.acquire_timeout.as_secs(),
@@ -114,6 +117,7 @@ impl From<&config::Config> for Config {
             quarantine_expiry: config.quarantine_expiry.as_secs(),
             validated_expiry: config.validated_expiry.as_secs(),
             publish_throttle: config.publish_throttle.as_secs(),
+            ultra_thin_inject_headers: config.ultra_thin_inject_headers,
         }
     }
 }
