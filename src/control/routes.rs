@@ -1,21 +1,24 @@
-use axum::routing::any;
+use axum::extract::Query;
+use axum::response::Html;
 use axum::{
     extract::{
-        ws::{self, WebSocketUpgrade},
+        ws::{self, WebSocketUpgrade}, Path,
         State,
     }, response::{
         sse::{Event as SSEvent, KeepAlive, Sse},
         Response,
     },
+    routing::any,
     Json,
     Router,
 };
 use futures_util::stream::Stream;
-use http::{header::CONTENT_TYPE, HeaderValue, StatusCode};
+use http::{header::CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use tokio_stream::StreamExt;
-use tower_cookies::CookieManagerLayer;
+use tower_cookies::{CookieManagerLayer, Cookies};
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::{debug, error};
@@ -25,26 +28,28 @@ use utoipa::{
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
 use utoipa_swagger_ui::SwaggerUi;
+use uuid::Uuid;
 
 use crate::constants::{
     AUTHORITY_CERT, AUTHORITY_PFX, STATIC_ASSETS_DIR, UI_ASSET_DIR, UI_FAVICON, UI_INDEX,
 };
 use crate::control::models::{
-    Config, Event, Settings, SettingsPatch, Status, Upstream, UpstreamRemove,
+    Config, Event, QueuePosition, Settings, SettingsPatch, Status, Upstream, UpstreamRemove,
 };
 use crate::errors::{Error, Result};
 use crate::queue::StoreCapacity;
 use crate::secrets::encode_master_key;
 use crate::signals::cancellable;
 use crate::state::AppState;
-use crate::upstream;
+use crate::{cookies, upstream};
 
-#[cfg(debug_assertions)]
-use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 #[cfg(debug_assertions)]
 use http::Method;
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
+
+#[cfg(debug_assertions)]
+use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -113,9 +118,11 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(get_cookie_key))
         .routes(routes!(get_authority_pfx))
         .routes(routes!(get_authority_pem))
+        .routes(routes!(get_upstreams, add_upstreams, remove_upstreams))
         .routes(routes!(get_status))
         .routes(routes!(get_settings, patch_settings))
-        .routes(routes!(get_upstreams, add_upstreams, remove_upstreams))
+        .routes(routes!(get_waiting_page, set_waiting_page))
+        .routes(routes!(get_queue_id, add_queue_id, delete_queue_id))
         .routes(routes!(get_server_sent_events))
         .route("/api/ws", any(get_web_socket))
         .nest_service("/favicon.ico", favicon_service)
@@ -283,6 +290,80 @@ async fn get_authority_pem() -> Result<String> {
 
 #[utoipa::path(
     get,
+    path = "/api/upstreams",
+    tag = "server",
+    summary = "Upstream Servers",
+    description = "List of all currently active upstream servers",
+    responses(
+        (status = 200, description = "OK", body = Vec<Upstream>)
+    )
+)]
+async fn get_upstreams(State(state): State<AppState>) -> Json<Vec<Upstream>> {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+    Json(
+        upstream_pool
+            .upstreams()
+            .await
+            .iter()
+            .map(Upstream::from)
+            .collect(),
+    )
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/upstreams",
+    tag = "server",
+    summary = "Add Upstream Servers",
+    description = "Add one or more upstream Omnis Studio servers",
+    request_body = [Upstream],
+    responses(
+        (status = 201, description = "Created"),
+        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
+    )
+)]
+async fn add_upstreams(
+    State(state): State<AppState>,
+    Json(upstreams): Json<Vec<Upstream>>,
+) -> StatusCode {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+
+    let upstreams: Vec<upstream::Upstream> =
+        upstreams.iter().map(upstream::Upstream::from).collect();
+    upstream_pool.add_upstreams(&upstreams).await;
+
+    StatusCode::CREATED
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/upstreams",
+    tag = "server",
+    summary = "Remove Upstream Servers",
+    description = "Remove one or more upstream Omnis Studio servers",
+    request_body = [UpstreamRemove],
+    responses(
+        (status = 200, description = "OK"),
+        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
+    )
+)]
+async fn remove_upstreams(
+    State(state): State<AppState>,
+    Json(upstreams): Json<Vec<UpstreamRemove>>,
+) -> StatusCode {
+    let state = state.clone();
+    let upstream_pool = &state.upstream_pool;
+
+    let upstreams: Vec<String> = upstreams.iter().map(|u| u.uri.clone()).collect();
+    upstream_pool.remove_uris(&upstreams).await;
+
+    StatusCode::OK
+}
+
+#[utoipa::path(
+    get,
     path = "/api/status",
     tag = "queue",
     summary = "Queue Status",
@@ -377,76 +458,178 @@ async fn patch_settings(
 
 #[utoipa::path(
     get,
-    path = "/api/upstreams",
+    path = "/api/waiting_page",
     tag = "queue",
-    summary = "Upstream Servers",
-    description = "List of all currently active upstream servers",
+    summary = "Get Waiting Page",
+    description = "Get or view the current waiting page, along with mock cookies/headers for testing",
     responses(
-        (status = 200, description = "OK", body = Vec<Upstream>)
+        (status = 200, description = "OK"),
+    ),
+    params(
+        ("position" = u64, Query, description = "position in the store (for testing)"),
+        ("size" = u64, Query, description = "size of the store (for testing)"),
     )
 )]
-async fn get_upstreams(State(state): State<AppState>) -> Json<Vec<Upstream>> {
+async fn get_waiting_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<(HeaderMap, Html<String>)> {
     let state = state.clone();
-    let upstream_pool = &state.upstream_pool;
-    Json(
-        upstream_pool
-            .upstreams()
-            .await
-            .iter()
-            .map(Upstream::from)
-            .collect(),
+    let config = &state.config;
+    let queue = &state.queue;
+
+    let test_position = match params.get("position") {
+        Some(position) => position.clone(),
+        None => String::from("33"),
+    };
+    let test_size = match params.get("size") {
+        Some(size) => size.clone(),
+        None => String::from("100"),
+    };
+
+    // Add fake cookies
+    cookies::add_browser_cookie(
+        &cookies,
+        config.position_cookie_name.clone(),
+        &test_position,
+    );
+    cookies::add_browser_cookie(&cookies, config.queue_size_cookie_name.clone(), &test_size);
+
+    // Add fakes headers
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HeaderName::from_lowercase(config.position_http_header.as_bytes())?,
+        test_position.clone().parse()?,
+    );
+    headers.insert(
+        HeaderName::from_lowercase(config.queue_size_http_header.as_bytes())?,
+        test_size.clone().parse()?,
+    );
+
+    Ok((
+        headers,
+        Html(queue.cached_waiting_page(&config.queue_prefix).await),
+    ))
+}
+
+#[utoipa::path(
+    patch,
+    path = "/api/waiting_page",
+    tag = "queue",
+    summary = "Set Waiting Page",
+    description = "Set the waiting page with new HTML content",
+    request_body = String,
+    responses(
+        (status = 200, description = "OK"),
+        (status = 400, description = "Bad Request"),
     )
+)]
+async fn set_waiting_page(State(state): State<AppState>, waiting_page: String) -> Result<()> {
+    let state = state.clone();
+    let config = &state.config;
+    let queue = &state.queue;
+
+    let is_valid = queue.test_waiting_page(&waiting_page);
+    if !is_valid {
+        return Err(Error::WaitingPageInvalid);
+    }
+
+    queue
+        .set_waiting_page(&config.queue_prefix, &waiting_page)
+        .await?;
+
+    Ok(())
 }
 
 #[utoipa::path(
     post,
-    path = "/api/upstreams",
+    path = "/api/queue",
     tag = "queue",
-    summary = "Add Upstream Servers",
-    description = "Add one or more upstream Omnis Studio servers",
-    request_body = [Upstream],
+    summary = "Create a new ID in the queue",
+    description = "Creates a brand new ID and returns its position in the store/queue",
     responses(
-        (status = 201, description = "Created"),
-        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
+        (status = 201, description = "Created", body = QueuePosition)
     )
 )]
-async fn add_upstreams(
-    State(state): State<AppState>,
-    Json(upstreams): Json<Vec<Upstream>>,
-) -> StatusCode {
+async fn add_queue_id(State(state): State<AppState>) -> Result<(StatusCode, Json<QueuePosition>)> {
     let state = state.clone();
-    let upstream_pool = &state.upstream_pool;
+    let config = &state.config;
+    let queue = &state.queue;
 
-    let upstreams: Vec<upstream::Upstream> =
-        upstreams.iter().map(upstream::Upstream::from).collect();
-    upstream_pool.add_upstreams(&upstreams).await;
+    let uuid = queue.new_id();
+    let position = queue
+        .id_position(&config.queue_prefix, uuid, None, true)
+        .await?;
 
-    StatusCode::CREATED
+    Ok((
+        StatusCode::CREATED,
+        Json(QueuePosition::new(uuid, position)),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/queue/{id}",
+    tag = "queue",
+    summary = "User ID Status",
+    description = "Get user position in the store/queue",
+    responses(
+        (status = 200, description = "OK", body = QueuePosition)
+    ),
+    params(
+        ("id" = u64, Path, description = "ID of the user in the store")
+    )
+)]
+async fn get_queue_id(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<Json<QueuePosition>> {
+    let state = state.clone();
+    let config = &state.config;
+    let queue = &state.queue;
+
+    let uuid = match Uuid::try_from(user_id.clone()) {
+        Ok(uuid) => uuid,
+        Err(e) => return Err(Error::QueueIdInvalid(user_id, e.into())),
+    };
+
+    let position = queue
+        .id_position(&config.queue_prefix, uuid, None, false)
+        .await?;
+
+    Ok(Json(QueuePosition::new(uuid, position)))
 }
 
 #[utoipa::path(
     delete,
-    path = "/api/upstreams",
+    path = "/api/queue/{id}",
     tag = "queue",
-    summary = "Remove Upstream Servers",
-    description = "Remove one or more upstream Omnis Studio servers",
-    request_body = [UpstreamRemove],
+    summary = "Evict User ID",
+    description = "Delete (\"Evict\") a user ID from the store/queue",
     responses(
-        (status = 200, description = "OK"),
-        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
+        (status = 200, description = "OK")
+    ),
+    params(
+        ("id" = u64, Path, description = "ID of the user in the store")
     )
 )]
-async fn remove_upstreams(
+async fn delete_queue_id(
     State(state): State<AppState>,
-    Json(upstreams): Json<Vec<UpstreamRemove>>,
-) -> StatusCode {
+    Path(user_id): Path<String>,
+) -> Result<StatusCode> {
     let state = state.clone();
-    let upstream_pool = &state.upstream_pool;
+    let config = &state.config;
+    let queue = &state.queue;
 
-    let upstreams: Vec<String> = upstreams.iter().map(|u| u.uri.clone()).collect();
-    upstream_pool.remove_uris(&upstreams).await;
+    let uuid = match Uuid::try_from(user_id.clone()) {
+        Ok(uuid) => uuid,
+        Err(e) => return Err(Error::QueueIdInvalid(user_id, e.into())),
+    };
 
-    StatusCode::OK
+    queue.id_remove(&config.queue_prefix, uuid, None).await?;
+
+    Ok(StatusCode::OK)
 }
 
 #[utoipa::path(

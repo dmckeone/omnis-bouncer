@@ -73,10 +73,11 @@ pub async fn check_waiting_page(
     let queue_prefix = config.queue_prefix.clone();
 
     let position = queue
-        .id_position(queue_prefix.clone(), queue_id.into(), None)
+        .id_position(queue_prefix.clone(), queue_id.into(), None, true)
         .await?;
 
     let position = match position {
+        QueuePosition::NotPresent => unreachable!(),
         QueuePosition::Queue(pos) => pos,
         QueuePosition::Store => return Ok(None),
     };

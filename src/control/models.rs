@@ -1,10 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+use uuid::Uuid;
 
-use crate::config;
 use crate::queue::{QueueEvent, QueueSettings, QueueStatus};
 use crate::upstream;
+use crate::{config, queue};
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[schema(
@@ -46,6 +47,43 @@ impl From<&Upstream> for upstream::Upstream {
 )]
 pub struct UpstreamRemove {
     pub(crate) uri: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[schema(
+    examples(
+        json!({"id": "ac42170a-a24b-4c9b-8eba-77204c05173d", "location": "queue", "position": 10}),
+        json!({"id": "1d42fe6c-baea-4645-a615-de9540764ea0", "location": "store", "position": null}),
+        json!({"id": "5bd3d674-8029-4526-b063-0c780e75ec50", "location": "missing", "position": null})
+    )
+)]
+pub struct QueuePosition {
+    id: String,
+    location: String,
+    position: Option<usize>,
+}
+
+impl QueuePosition {
+    pub fn new(id: Uuid, position: queue::QueuePosition) -> Self {
+        let id = String::from(id);
+        match position {
+            queue::QueuePosition::NotPresent => Self {
+                id,
+                location: String::from("missing"),
+                position: None,
+            },
+            queue::QueuePosition::Store => Self {
+                id,
+                location: String::from("store"),
+                position: None,
+            },
+            queue::QueuePosition::Queue(position) => Self {
+                id,
+                location: String::from("queue"),
+                position: Some(position),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use std::default::Default;
+use tracing::error;
 
 use crate::errors::{Error, Result};
 
@@ -52,15 +53,33 @@ impl QueueRotate {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueuePosition {
+    NotPresent,
     Store,
     Queue(usize),
 }
 
-impl From<usize> for QueuePosition {
-    fn from(value: usize) -> Self {
+impl QueuePosition {
+    pub fn from_redis(status: usize, position: usize) -> Self {
+        match status {
+            0 => Self::NotPresent,
+            1..=2 => match position {
+                0 => QueuePosition::Store,
+                1.. => QueuePosition::Queue(position),
+            },
+            _ => {
+                error!("Invalid queue position status: {}", status);
+                QueuePosition::NotPresent
+            }
+        }
+    }
+}
+
+impl From<isize> for QueuePosition {
+    fn from(value: isize) -> Self {
         match value {
+            ..=-1 => QueuePosition::NotPresent,
             0 => QueuePosition::Store,
-            1.. => QueuePosition::Queue(value),
+            1.. => QueuePosition::Queue(value as usize),
         }
     }
 }

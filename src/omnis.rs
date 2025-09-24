@@ -393,7 +393,7 @@ pub async fn omnis_studio_upstream(
 
     // Check for queue eviction header
     let evict_header = config.id_evict_upstream_http_header.as_str();
-    if let Some(_) = response.headers().get(evict_header) {
+    if response.headers().get(evict_header).is_some() {
         // Upstream has specified that this client should be evicted
         let cookie = private_cookies.get(config.id_cookie_name.clone().as_str());
         if let QueueId::Existing(queue_id) = extract_queue_id(queue, &cookie) {
@@ -431,12 +431,12 @@ pub async fn omnis_studio_upstream(
 }
 
 fn upstream_header_filter(entry: &(&HeaderName, &HeaderValue)) -> bool {
-    let (h, v) = entry;
+    let (h, _) = entry;
     !UPSTREAM_IGNORE.contains(*h) && !(*h).as_str().to_lowercase().starts_with("sec")
 }
 
 fn ultra_thin_header_filter(entry: &(&HeaderName, &HeaderValue)) -> bool {
-    let (h, v) = entry;
+    let (h, _) = entry;
     !ULTRA_THIN_IGNORE.contains(*h) && !(*h).as_str().to_lowercase().starts_with("sec")
 }
 
@@ -472,12 +472,12 @@ async fn build_upstream_request(
             };
 
             let epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
-            let mut ultra_thin_info = vec![
-                String::from(format!("SERVER_TIME={}", epoch.as_secs())),
-                String::from(format!("HTTP_METHOD={}", request_method.as_str())),
-                String::from(format!("HTTP_PATH={}", request_path)),
-                String::from(format!("REMOTE_ADDR={}", connect_info.ip())),
-                String::from(format!("REMOTE_PORT={}", connect_info.port())),
+            let mut ultra_thin_info: Vec<String> = vec![
+                format!("SERVER_TIME={}", epoch.as_secs()),
+                format!("HTTP_METHOD={}", request_method.as_str()),
+                format!("HTTP_PATH={}", request_path),
+                format!("REMOTE_ADDR={}", connect_info.ip()),
+                format!("REMOTE_PORT={}", connect_info.port()),
             ];
             if let Some(query) = path_and_query.query() {
                 ultra_thin_info.push(format!("HTTP_QUERY={}", query));

@@ -1,17 +1,18 @@
 -----------------------------------------------------------------------------------------------------------------------
 -- ID (QUEUE) POSITION
 --
--- Return the position of a UUID in the queue.  If the UUID is in the store then the function returns 0.  As an
--- optimization, if the UUID is not in the queue or the store, then it is added in the same way as ID_ADD.  This
--- function takes into account expiry dates, to prevent returning stale queue positions.
+-- Return the position of a UUID in the queue.  If the UUID is in the store then the function returns 0 for the
+-- position.  As an optimization, if the UUID is not in the queue or the store, and the create flag is set, then it
+-- is added.  This function takes into account  expiry dates, to prevent returning stale queue positions.
 --
 -- ARGV[1]: prefix - STRING
 -- ARGV[2]: id - STRING
 -- ARGV[3]: time - INTEGER
 -- ARGV[4]: validated_expiry - INTEGER
 -- ARGV[5]: quarantine_expiry - INTEGER
+-- ARGV[6]: create - INTEGER (0 = do not create if not present, 1 = create if not present)
 --
--- RETURN: 2-Tuple of {added - INTEGER, position - INTEGER}
+-- RETURN: 2-Tuple of {status - INTEGER, position - INTEGER}
 -----------------------------------------------------------------------------------------------------------------------
 
 local store_ids_key = ARGV[1] .. ':store_ids'
@@ -23,7 +24,7 @@ if in_set == 1 then
     redis.call('HSET', store_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
 
     local result = {}
-    result[1] = 0
+    result[1] = 1  -- Present
     result[2] = 0
     return result
 end
@@ -39,14 +40,21 @@ if queue_position then
     redis.call('HSET', queue_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
 
     local result = {}
-    result[1] = 0
+    result[1] = 1  -- Present
     result[2] = queue_position
     return result
 end
 
-local store_capacity_key = ARGV[1] .. ':store_capacity'
+if tonumber(ARGV[6]) == 0 then
+    local result = {}
+    result[1] = 0  -- Not present
+    result[2] = 0
+    return result
+end
 
 -- DEV NOTE: All the code below handles adding new tokens to the queue, including quarantine -> validated upgrade
+
+local store_capacity_key = ARGV[1] .. ':store_capacity'
 
 -- Check if the store size is -1 (this means the store size is infinite and we don't need to add the token to the queue)
 local store_capacity = redis.call('GET', store_capacity_key)
@@ -63,7 +71,7 @@ if store_capacity < 0 then
     redis.call('HSET', store_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
 
     local result = {}
-    result[1] = 1
+    result[1] = 2  -- Added
     result[2] = 0
     return result
 end
@@ -78,7 +86,7 @@ if queue_size ~= nil and queue_size > 0 then
     redis.call('HSET', queue_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[5]) -- quarantine expiry
 
     local result = {}
-    result[1] = 1
+    result[1] = 2  -- Added
     result[2] = pos
     return result
 end
@@ -92,7 +100,7 @@ if current_size ~= nil and current_size < store_capacity then
     redis.call('HSET', store_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[4]) -- validated expiry
 
     local result = {}
-    result[1] = 1
+    result[1] = 2  -- Added
     result[2] = 0
     return result
 else
@@ -102,7 +110,7 @@ else
     redis.call('HSET', queue_expiry_secs_key, ARGV[2], ARGV[3] + ARGV[5]) -- quarantine expiry
 
     local result = {}
-    result[1] = 1
+    result[1] = 2 -- Added
     result[2] = pos
     return result
 end

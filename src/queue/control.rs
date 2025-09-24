@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{Connection, Pool as RedisPool};
 use futures_util::{pin_mut, Stream};
+use is_html::is_html;
 use lazy_static::lazy_static;
 use minify_html_onepass::{copy as minify, Cfg};
 use redis::{self, pipe, AsyncTypedCommands};
@@ -466,6 +467,23 @@ impl QueueControl {
         }
     }
 
+    // Test whether a waiting page can be minified (decent test of HTML quality)
+    pub fn test_waiting_page(&self, page: impl Into<String>) -> bool {
+        let page = page.into();
+
+        if !is_html(&page) {
+            return false;
+        }
+
+        match minify(page.as_bytes(), &minfiy_cfg) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(_) => true,
+                Err(_) => false,
+            },
+            Err(_) => false,
+        }
+    }
+
     pub async fn verify_waiting_page(&self, prefix: impl Into<String>) {
         let prefix = prefix.into();
 
@@ -514,7 +532,6 @@ impl QueueControl {
         self.scripts.check_sync_keys(&mut conn, prefix).await
     }
 
-    /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
     pub async fn has_ids(&self, prefix: impl Into<String>) -> Result<bool> {
         let mut conn = self.conn().await?;
         self.scripts.has_ids(&mut conn, prefix).await
@@ -527,11 +544,12 @@ impl QueueControl {
         prefix: impl Into<String>,
         id: Uuid,
         time: Option<DateTime<Utc>>,
+        create: bool,
     ) -> Result<QueuePosition> {
         let prefix = prefix.into();
         let mut conn = self.conn().await?;
 
-        let (added, position) = self
+        let (status, position) = self
             .scripts
             .id_position(
                 &mut conn,
@@ -540,17 +558,23 @@ impl QueueControl {
                 time,
                 self.validated_expiry,
                 self.quarantine_expiry,
+                create,
             )
             .await?;
 
-        let position: QueuePosition = position.into();
-        if added {
-            let event = match position {
-                QueuePosition::Store => QueueEvent::StoreAdded,
-                QueuePosition::Queue(_) => QueueEvent::QueueAdded,
-            };
-            self.emit(&mut conn, &prefix, event, None).await;
-        }
+        let position = QueuePosition::from_redis(status, position);
+
+        match position {
+            QueuePosition::NotPresent => {}
+            QueuePosition::Store => {
+                self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
+                    .await;
+            }
+            QueuePosition::Queue(_) => {
+                self.emit(&mut conn, &prefix, QueueEvent::QueueAdded, None)
+                    .await;
+            }
+        };
 
         Ok(position)
     }
@@ -579,32 +603,6 @@ impl QueueControl {
         let prefix = prefix.into();
         let mut conn = self.conn().await?;
         let rotate = self.scripts.rotate_full(&mut conn, &prefix, time).await?;
-
-        if rotate.promoted > 0 {
-            self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
-                .await;
-        }
-        if rotate.queue_expired > 0 {
-            self.emit(&mut conn, &prefix, QueueEvent::QueueExpired, None)
-                .await;
-        }
-        if rotate.store_expired > 0 {
-            self.emit(&mut conn, &prefix, QueueEvent::StoreExpired, None)
-                .await;
-        }
-
-        Ok(rotate)
-    }
-
-    /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
-    pub async fn rotate_expire(
-        &self,
-        prefix: impl Into<String>,
-        time: Option<DateTime<Utc>>,
-    ) -> Result<QueueRotate> {
-        let prefix = prefix.into();
-        let mut conn = self.conn().await?;
-        let rotate = self.scripts.rotate_expire(&mut conn, &prefix, time).await?;
 
         if rotate.promoted > 0 {
             self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
@@ -684,7 +682,7 @@ mod test {
             let id = queue.new_id();
 
             queue
-                .id_position(&prefix, id, time)
+                .id_position(&prefix, id, time, true)
                 .await
                 .expect("Failed to add new ID to queue");
 
@@ -1244,7 +1242,7 @@ mod test {
 
         // Check that the first ID is in the store
         let position = queue
-            .id_position(prefix, *first_id, None)
+            .id_position(prefix, *first_id, None, true)
             .await
             .expect("Failed to get first position");
 
@@ -1252,7 +1250,7 @@ mod test {
 
         // Check that the last ID is at the back of the line (queue positions are indexed from 1)
         let position = queue
-            .id_position(prefix, *last_id, None)
+            .id_position(prefix, *last_id, None, true)
             .await
             .expect("Failed to get last position");
 
@@ -1282,7 +1280,7 @@ mod test {
 
         // Add item to the queue for quarantine
         queue
-            .id_position(prefix, id, Some(time))
+            .id_position(prefix, id, Some(time), true)
             .await
             .expect("Failed to add new ID to queue");
 
@@ -1291,7 +1289,7 @@ mod test {
 
         // Fetch position a second time (upgrading the ID from quarantine to validated)
         queue
-            .id_position(prefix, id, Some(time))
+            .id_position(prefix, id, Some(time), true)
             .await
             .expect("Failed to add new ID to queue");
 
@@ -1466,39 +1464,6 @@ mod test {
             .await
             .expect("Failed to get store size");
         assert_eq!(store_size, store_capacity);
-
-        clean_keys(prefix).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_rotate_expire() {
-        let prefix = "test_rotate_expire";
-
-        let (queue, mut conn) = test_queue_conn().await;
-
-        // Clear store and initialize store capacity to 1
-        clear_store(prefix, &mut conn).await;
-        queue
-            .set_queue_settings(prefix, true, StoreCapacity::Sized(1))
-            .await
-            .expect("Failed to set queue status");
-
-        let insert_time =
-            DateTime::from_timestamp_secs(1757610168).expect("Failed to create timestamp");
-        let rotate_time = insert_time + VALIDATED + Duration::from_secs(1);
-
-        let count = 5;
-        let _ = add_many(&queue, prefix, count, Some(insert_time)).await;
-
-        let rotation = queue
-            .rotate_expire(prefix, Some(rotate_time))
-            .await
-            .expect("Failed to rotate");
-
-        assert_eq!(rotation.queue_expired, count - 1);
-        assert_eq!(rotation.store_expired, 1);
-        assert_eq!(rotation.promoted, 0);
 
         clean_keys(prefix).await;
     }

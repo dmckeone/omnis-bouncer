@@ -137,6 +137,7 @@ impl Scripts {
 
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
+    #[allow(clippy::too_many_arguments)]
     pub async fn id_position(
         &self,
         conn: &mut Connection,
@@ -145,7 +146,8 @@ impl Scripts {
         time: Option<DateTime<Utc>>,
         validated_expiry: Duration,
         quarantine_expiry: Duration,
-    ) -> Result<(bool, usize)> {
+        create: bool,
+    ) -> Result<(usize, usize)> {
         let prefix = prefix.into();
 
         let time = match time {
@@ -160,21 +162,26 @@ impl Scripts {
             .arg(time.timestamp())
             .arg(validated_expiry.as_secs())
             .arg(quarantine_expiry.as_secs())
+            .arg(match create {
+                true => 1,
+                false => 0,
+            })
             .invoke_async(conn)
             .await?;
 
-        let [added, position] = result;
+        let [status, position] = result;
 
-        let added = match added {
-            0 => false,
-            1 => true,
+        let status = match status {
+            0 => 0,
+            1 => 1,
+            2 => 2,
             _ => {
-                let msg = format!("Unexpected result from \"id_position\": {}", added);
+                let msg = format!("Unexpected status from \"id_position\": {}", status);
                 return Err(Error::RedisScriptUnreadable(msg));
             }
         };
 
-        Ok((added, position))
+        Ok((status, position))
     }
 
     /// Remove a given UUID from the queue/store
@@ -233,36 +240,6 @@ impl Scripts {
         let promoted = result.2.unwrap_or(0);
 
         Ok(QueueRotate::new(queue_removed, store_removed, promoted))
-    }
-
-    /// Partial queue rotation that only expires IDs, but doesn't promote IDs from queue to store
-    pub async fn rotate_expire(
-        &self,
-        conn: &mut Connection,
-        prefix: impl Into<String>,
-        time: Option<DateTime<Utc>>,
-    ) -> Result<QueueRotate> {
-        let prefix = prefix.into();
-
-        let time = match time {
-            Some(t) => t,
-            None => current_time(conn).await?,
-        };
-
-        let (store_expired, queue_expired) = pipe()
-            .atomic()
-            .invoke_script(self.store_timeout.arg(&prefix).arg(time.timestamp()))
-            .invoke_script(self.queue_timeout.arg(&prefix).arg(time.timestamp()))
-            .query_async(conn)
-            .await?;
-
-        let rotate = QueueRotate {
-            queue_expired,
-            store_expired,
-            promoted: 0,
-        };
-
-        Ok(rotate)
     }
 }
 

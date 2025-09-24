@@ -10,11 +10,13 @@ use crate::queue::QueueEvent;
 // Generic Error type for all errors in handlers
 #[derive(Debug)]
 pub enum Error {
+    QueueIdInvalid(String, anyhow::Error),
     QueueEventLost(SendError<QueueEvent>),
     ControlUIAppMissing,
     QueueEnabledOutOfRange(String),
     StoreCapacityOutOfRange(String),
     QueueSyncTimestampOutOfRange(String),
+    WaitingPageInvalid,
     RedisTimeIsNil,
     RedisScriptUnreadable(String),
     RedisEventUnknown(String),
@@ -30,6 +32,14 @@ impl IntoResponse for Error {
         match self {
             Error::QueueEventLost(e) => error!("Error emitting queue broadcast: {}", e),
             Error::ControlUIAppMissing => error!("Control WebUI files cannot be found"),
+            Error::QueueIdInvalid(uuid, error) => {
+                error!("queue id was not a valid UUID - \"{}\": {}", uuid, error);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "queue id was not a valid UUID".to_string(),
+                )
+                    .into_response();
+            }
             Error::QueueEnabledOutOfRange(enabled) => {
                 error!("queue enabled out of range: {}", enabled);
                 return (
@@ -48,6 +58,14 @@ impl IntoResponse for Error {
             }
             Error::QueueSyncTimestampOutOfRange(timestamp) => {
                 error!("queue sync timestamp out of range: {}", timestamp)
+            }
+            Error::WaitingPageInvalid => {
+                error!("waiting page could not be parsed and minified as HTML");
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "waiting page content did not appear to be valid HTML".to_string(),
+                )
+                    .into_response();
             }
             Error::RedisTimeIsNil => error!("redis time is incorrectly returning nil"),
             Error::RedisScriptUnreadable(script) => error!("script unreadable: {}", script),
