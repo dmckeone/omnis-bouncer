@@ -440,6 +440,15 @@ impl QueueControl {
         Ok(result)
     }
 
+    pub async fn waiting_page_or_default(&self, prefix: impl Into<String>) -> Result<String> {
+        let page = match self.waiting_page(prefix).await? {
+            Some(waiting_page) => waiting_page.clone(),
+            None => (*DefaultWaitingPage).clone(),
+        };
+
+        Ok(page)
+    }
+
     pub async fn set_waiting_page(
         &self,
         prefix: impl Into<String>,

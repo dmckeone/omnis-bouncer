@@ -509,7 +509,7 @@ async fn get_waiting_page(
 
     Ok((
         headers,
-        Html(queue.cached_waiting_page(&config.queue_prefix).await),
+        Html(queue.waiting_page_or_default(&config.queue_prefix).await?),
     ))
 }
 
