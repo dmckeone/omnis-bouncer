@@ -1,10 +1,9 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{Connection, Pool as RedisPool};
-use futures_util::Stream;
+use futures_util::{pin_mut, Stream};
 use lazy_static::lazy_static;
 use minify_html_onepass::{copy as minify, Cfg};
 use redis::{self, pipe, AsyncTypedCommands};
-use std::collections::HashSet;
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -12,7 +11,6 @@ use std::{
 };
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::{broadcast, Notify, RwLock};
-use tokio::time::sleep_until;
 use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
 use tracing::error;
 use uuid::Uuid;
@@ -28,7 +26,6 @@ use crate::queue::scripts::{
     waiting_page_key, Scripts,
 };
 use crate::stream::debounce;
-use crate::upstream::Upstream;
 
 lazy_static! {
     static ref minfiy_cfg: Cfg = Cfg {
@@ -50,10 +47,12 @@ lazy_static! {
 
 #[derive(Debug, Clone)]
 pub struct QueueEvents {
+    cancel: Arc<Notify>,
     subscriber: RedisSubscriber,
 }
 
 impl QueueEvents {
+    /// Create a monitor for queue events with a Redis client
     pub async fn from_client(
         client: redis::Client,
         prefix: impl Into<String>,
@@ -62,11 +61,13 @@ impl QueueEvents {
         let prefix = prefix.into();
         let channel_name = format!("{}:events", prefix);
         Ok(Self {
+            cancel: cancel.clone(),
             subscriber: RedisSubscriber::from_client(client, channel_name, cancel).await?,
         })
     }
 
-    pub fn stream_filter(
+    /// Convert Redis events into QueueEvent
+    fn stream_filter(
         value: core::result::Result<String, BroadcastStreamRecvError>,
     ) -> Option<QueueEvent> {
         let value = match value {
@@ -98,48 +99,25 @@ impl QueueEvents {
     }
 
     /// Receiver for debounced queue events
-    pub fn receiver(&self, cancel: Arc<Notify>) -> Receiver<QueueEvent> {
-        let mut subscriber_receiver = self.subscriber.receiver();
-
+    pub fn receiver(self) -> Receiver<QueueEvent> {
+        let cancel = self.cancel.clone();
+        let stream = self.into_stream();
         let (sender, receiver) = broadcast::channel(100);
 
         tokio::spawn(async move {
-            // Bookkeeping of unique items and last poll time
-            let mut last_poll = Instant::now();
-            let mut items: HashSet<QueueEvent> = HashSet::new();
+            pin_mut!(stream);
             loop {
                 tokio::select! {
-                    _ = cancel.notified() => {
-                        break;
-                    },
-                    _ = sleep_until((last_poll + DEBOUNCE_INTERVAL).into()) => {
-                        for queue_event in items.into_iter() {
-                            if let Err(error) = sender.send(queue_event) {
-                                error!("Failed to send queue event: {:?}", error);
-                            }
-                        }
-
-                        last_poll = Instant::now();
-                        items = HashSet::new();
-                    }
-                    event = subscriber_receiver.recv() => {
-                        let event = match event {
-                            Ok(event) => event,
-                            Err(err) => {
-                                error!("Failed to parse Redis event: {:?}", err);
-                                continue
-                            }
+                    _ = cancel.notified() => break,
+                    _ = sender.closed() => break,
+                    queue_event = stream.next() => {
+                        let queue_event = match queue_event {
+                            Some(queue_event) => queue_event,
+                            None => break
                         };
-
-                        let queue_event = match QueueEvent::try_from(event.as_str()) {
-                            Ok(queue_event) => queue_event,
-                            Err(err) => {
-                                error!("Failed to parse Redis event: {:?}", err);
-                                continue
-                            }
+                        if let Err(error) = sender.send(queue_event) {
+                            error!("Failed to send queue event: {:?}", error);
                         };
-
-                        items.insert(queue_event);
                     }
                 }
             }

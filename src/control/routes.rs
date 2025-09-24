@@ -3,8 +3,7 @@ use axum::{
     extract::{
         ws::{self, WebSocketUpgrade},
         State,
-    }, http::Version,
-    response::{
+    }, response::{
         sse::{Event as SSEvent, KeepAlive, Sse},
         Response,
     },
@@ -19,6 +18,7 @@ use tokio_stream::StreamExt;
 use tower_cookies::CookieManagerLayer;
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tower_serve_static::{File, ServeDir, ServeFile};
+use tracing::{debug, error};
 use utoipa::{
     openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder, openapi::Tag, OpenApi,
 };
@@ -32,9 +32,8 @@ use crate::constants::{
 use crate::control::models::{
     Config, Event, Settings, SettingsPatch, Status, Upstream, UpstreamRemove,
 };
-
 use crate::errors::{Error, Result};
-use crate::queue::{QueueEvent, StoreCapacity};
+use crate::queue::StoreCapacity;
 use crate::secrets::encode_master_key;
 use crate::signals::cancellable;
 use crate::state::AppState;
@@ -46,7 +45,6 @@ use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 use http::Method;
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
-use tracing::{debug, error};
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -138,7 +136,7 @@ pub fn router(state: AppState) -> Router {
         build_tag(
             "stream",
             "Streams",
-            "Routes for streaming data from the server",
+            "Routes for streaming events from the server",
         ),
         build_tag("ops", "Operations", "Routes for simpler DevOps"),
     ]);
@@ -157,6 +155,28 @@ pub fn router(state: AppState) -> Router {
         String::from("x-tagGroup"),
         serde_json::to_value(queue_groups).unwrap(),
     );
+
+    // WORKAROUND: Back in a web socket path manually, since Utoipa doesn't yet support
+    //             web socket routes
+    let path = utoipa::openapi::PathItem::new(
+        utoipa::openapi::HttpMethod::Get,
+        utoipa::openapi::path::OperationBuilder::new()
+            .summary(Some("WebSocket"))
+            .description(Some("Events pushed from the server to notify UI changes.  All payloads are strings:
+* `settings:updated`
+* `waiting_page:updated`
+* `queue:added`
+* `queue:expired`
+* `store:added`
+* `store:expired`
+* `queue:removed`
+
+See [MDN - Writing Web Socket Client Applications](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API/Writing_WebSocket_client_applications) for more details",
+            ))
+            .tag("stream"),
+    );
+    api.paths.paths.insert(String::from("/api/ws"), path);
+    // END WORKAROUND
 
     // Merge OpenAPI spec into routing
     router = router
@@ -439,11 +459,7 @@ async fn remove_upstreams(
 * `store:expired`
 * `queue:removed`
 
-See [MDN - Using Server Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) for more details\
-    ",
-    responses(
-        (status = 200, description = "OK", body = String, example = "settings:updated")
-    )
+See [MDN - Using Server Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events) for more details"
 )]
 async fn get_server_sent_events(
     State(state): State<AppState>,
@@ -475,24 +491,20 @@ async fn control_ui_handler() -> Result<Response<axum::body::Body>> {
     Ok(response)
 }
 
-// TOOD: Build web socket with event stream
-async fn get_web_socket(
-    ws: WebSocketUpgrade,
-    version: Version,
-    State(state): State<AppState>,
-) -> axum::response::Response {
-    tracing::debug!("accepted a WebSocket using {version:?}");
+async fn get_web_socket(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     let state = state.clone();
     let cancel = state.shutdown_notifier.clone();
 
     // Create stream of Queue events
     let subscriber = state.queue_events.clone();
-    let mut receiver = subscriber.receiver(cancel.clone());
+    let mut receiver = subscriber.receiver();
 
-    ws.on_upgrade(|mut ws| async move {
+    ws.on_failed_upgrade(|error| {
+        error!("Failed to upgrade WebSocket: {:?}", error);
+    })
+    .on_upgrade(|mut ws| async move {
         loop {
             tokio::select! {
-                // Since `ws` is a `Stream`, it is by nature cancel-safe.
                 _ = cancel.notified() => {
                     break;
                 },
@@ -500,26 +512,25 @@ async fn get_web_socket(
                     // Receive data from web socket
                     match res {
                         Some(Ok(ws::Message::Text(s))) => {
-                            error!("Received unexpected message from web socket: {}", s)
+                            error!("Received unexpected text from web socket: {}", s)
                         },
-                        Some(Ok(_)) => {}
+                        Some(Ok(ws::Message::Binary(_))) => {
+                            error!("Received unexpected bytes from web socket")
+                        },
+                        Some(Ok(ws::Message::Ping(_))) => {},
+                        Some(Ok(ws::Message::Pong(_))) => {},
+                        Some(Ok(ws::Message::Close(_))) => {},
                         Some(Err(error)) => debug!("client disconnected abruptly: {error}"),
                         None => break,
                     }
                 },
                 queue_event = receiver.recv() => {
                     // Push data to web socket
-                    let queue_event = match queue_event {
-                        Ok(queue_event) => queue_event,
-                        Err(err) => {
-                            error!("Failed to parse queue event: {:?}", err);
-                            continue
+                    if let Ok(queue_event) = queue_event {
+                        let payload = String::from(Event::from(queue_event));
+                        if let Err(error) = ws.send(ws::Message::Text(payload.into())).await {
+                            debug!("client disconnected abruptly: {}", error);
                         }
-                    };
-
-                    let payload = String::from(Event::from(queue_event));
-                    if let Err(error) =  ws.send(ws::Message::Text(payload.into())).await {
-                        debug!("client disconnected abruptly: {}", error);
                     }
                 }
             }

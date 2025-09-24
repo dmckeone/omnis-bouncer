@@ -12,10 +12,9 @@ use http::header::{
     UPGRADE_INSECURE_REQUESTS,
 };
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use http_types::Mime;
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
-use std::{collections::HashSet, str::FromStr, time::Duration};
+use std::{collections::HashSet, time::Duration};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, load_shed::LoadShedLayer, ServiceBuilder};
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};

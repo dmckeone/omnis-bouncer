@@ -270,13 +270,13 @@ impl UpstreamPool {
     }
 
     /// Add a vector of upstream URIs to the pool
-    pub async fn add_upstreams(&self, uris: &Vec<Upstream>) {
+    pub async fn add_upstreams(&self, uris: &[Upstream]) {
         let mut guard = self._write_lock().await;
         (*guard).add_upstreams(uris);
     }
 
     /// Remove a vector of URIs from the pool
-    pub async fn remove_uris(&self, uris: &Vec<String>) {
+    pub async fn remove_uris(&self, uris: &[String]) {
         let mut guard = self._write_lock().await;
         (*guard).remove_uris(uris);
     }
@@ -482,7 +482,7 @@ impl Pool {
     }
 
     /// Add 1+ URIs to the upstream pool
-    fn add_upstreams(&mut self, upstreams: &Vec<Upstream>) {
+    fn add_upstreams(&mut self, upstreams: &[Upstream]) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = self.pool.iter().map(|s| s.uri.clone()).collect();
 
@@ -498,7 +498,7 @@ impl Pool {
     }
 
     /// Remove 1+ of URIs from the service
-    fn remove_uris(&mut self, uris: &Vec<String>) {
+    fn remove_uris(&mut self, uris: &[String]) {
         // Create unique set of URIs for comparison
         let uri_set: HashSet<String> = uris.iter().cloned().collect();
 
