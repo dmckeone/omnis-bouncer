@@ -206,6 +206,8 @@ pub async fn omnis_studio_upstream(
     // Extract config
     let state = state.clone();
     let config = &state.config;
+    let queue = &state.queue;
+    let upstream_pool = &state.upstream_pool;
 
     // Clone properties of the request that are used
     let path_and_query = uri.path_and_query().unwrap();
@@ -353,19 +355,42 @@ pub async fn omnis_studio_upstream(
         None => String::from("<unknown>"),
     };
 
+    // Log upstream request
     info!(
         "{} {} -> {} -> {}",
         method, path_and_query, upstream_uri, content_type
     );
 
-    // Build Headers
+    // Check for queue eviction header
+    let evict_header = config.id_evict_upstream_http_header.as_str();
+    if let Some(_) = response.headers().get(evict_header) {
+        // Upstream has specified that this client should be evicted
+        let cookie = private_cookies.get(config.id_cookie_name.clone().as_str());
+        if let QueueId::Existing(queue_id) = extract_queue_id(queue, &cookie) {
+            // Remove cookie
+            private_cookies.remove(Cookie::from(config.id_cookie_name.clone()));
+            // Drop sticky session (if it exists)
+            upstream_pool.remove_sticky_session(&queue_id).await;
+            // Drop from queue (if it exists)
+            if let Err(error) = state
+                .queue
+                .id_remove(&config.queue_prefix, queue_id, None)
+                .await
+            {
+                error!(
+                    "Failed to evict ID from the queue - {}: {:?}",
+                    queue_id, error
+                );
+            }
+        }
+    }
+
+    // Build Headers For Response
     let response_headers: HeaderMap<HeaderValue> = response
         .headers()
         .iter()
-        .filter_map(|(k, v)| match UPSTREAM_IGNORE.contains(k) {
-            true => None,
-            false => Some((k.to_owned(), v.to_owned())),
-        })
+        .filter(|(k, _)| *k != evict_header && !UPSTREAM_IGNORE.contains(*k))
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
 
     // Copy all response headers except the ones in the ignore list

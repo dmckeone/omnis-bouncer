@@ -15,6 +15,7 @@ pub struct Config {
     pub position_cookie_name: String,
     pub queue_size_cookie_name: String,
     pub id_upstream_http_header: String,
+    pub id_evict_upstream_http_header: String,
     pub position_http_header: String,
     pub queue_size_http_header: String,
     pub acquire_timeout: Duration,

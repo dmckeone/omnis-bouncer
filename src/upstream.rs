@@ -253,6 +253,11 @@ impl UpstreamPool {
         }
     }
 
+    pub async fn remove_sticky_session(&self, id: &Uuid) {
+        let guard = self._read_lock().await;
+        (*guard).remove_sticky_session(id).await
+    }
+
     pub async fn expire_sticky_sessions(&self) -> HashSet<Uuid> {
         let guard = self._read_lock().await;
         (*guard).expire_sticky(self.sticky_expiry_secs).await
@@ -458,6 +463,25 @@ impl Pool {
 
             // Not timed out, wait a second (to save CPU) and try again
             sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    async fn remove_sticky_session(&self, id: &Uuid) {
+        for upstream in self.pool.iter() {
+            // Get read lock to see if the ID is in this pool
+            let mut found = false;
+            {
+                let guard = upstream.sticky_sessions.read().await;
+                if guard.contains_key(id) {
+                    found = true;
+                }
+            }
+
+            // If the session is found then get the write lock to remove it
+            if found {
+                upstream.sticky_sessions.write().await.remove(id);
+                return;
+            }
         }
     }
 

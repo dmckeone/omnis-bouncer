@@ -18,6 +18,7 @@ interface AppInfo {
     position_cookie_name: string,
     queue_size_cookie_name: string,
     id_upstream_http_header: string,
+    id_evict_upstream_http_header: string,
     position_http_header: string,
     queue_size_http_header: string,
     acquire_timeout: number,
