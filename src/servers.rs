@@ -17,7 +17,7 @@ pub async fn insecure_server(
     router: Router,
 ) -> io::Result<()> {
     let server = axum_server::bind(addr);
-    let service = ServiceExt::<Request>::into_make_service(router);
+    let service = ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(router);
     server.handle(shutdown_handle).serve(service).await
 }
 
@@ -32,7 +32,7 @@ pub async fn secure_server(
     let mut server = axum_server::bind_rustls(addr, tls_config);
     // Advertise support for HTTP/2 to the client (required by web sockets)
     server.http_builder().http2().enable_connect_protocol();
-    let service = ServiceExt::<Request>::into_make_service(router);
+    let service = ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(router);
 
     server.handle(shutdown_handle).serve(service).await
 }

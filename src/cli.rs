@@ -327,6 +327,24 @@ pub struct RunArgs {
         env = "OMNIS_BOUNCER_ULTRA_THIN_INJECT_HEADERS"
     )]
     pub ultra_thin_inject_headers: bool,
+
+    /// Omnis Studio library to use as a fallback for requests that aren't routed directly to
+    /// /ultra.  Must be used in conjunction with fallback_ultra_thin_class.
+    #[arg(
+        long,
+        requires = "fallback_ultra_thin_class",
+        env = "OMNIS_BOUNCER_FALLBACK_ULTRA_THIN_LIBRARY"
+    )]
+    pub fallback_ultra_thin_library: Option<String>,
+
+    /// Omnis Studio remote task class to use as a fallback for requests that aren't routed
+    /// directly to /ultra.  Must be used in conjunction with fallback_ultra_thin_library.
+    #[arg(
+        long,
+        requires = "fallback_ultra_thin_library",
+        env = "OMNIS_BOUNCER_FALLBACK_ULTRA_THIN_CLASS"
+    )]
+    pub fallback_ultra_thin_class: Option<String>,
 }
 
 // Build upstreams from args
@@ -411,6 +429,8 @@ impl TryFrom<&RunArgs> for Config {
             validated_expiry: Duration::from_secs(args.validated_expiry),
             publish_throttle: Duration::from_millis(args.publish_throttle),
             ultra_thin_inject_headers: args.ultra_thin_inject_headers,
+            fallback_ultra_thin_library: args.fallback_ultra_thin_library.clone(),
+            fallback_ultra_thin_class: args.fallback_ultra_thin_class.clone(),
         };
 
         Ok(config)

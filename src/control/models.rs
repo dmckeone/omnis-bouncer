@@ -85,6 +85,8 @@ pub struct Config {
     pub validated_expiry: u64,
     pub publish_throttle: u64,
     pub ultra_thin_inject_headers: bool,
+    pub fallback_ultra_thin_library: Option<String>,
+    pub fallback_ultra_thin_class: Option<String>,
 }
 
 impl From<&config::Config> for Config {
@@ -120,6 +122,8 @@ impl From<&config::Config> for Config {
             validated_expiry: config.validated_expiry.as_secs(),
             publish_throttle: config.publish_throttle.as_secs(),
             ultra_thin_inject_headers: config.ultra_thin_inject_headers,
+            fallback_ultra_thin_library: config.fallback_ultra_thin_library.clone(),
+            fallback_ultra_thin_class: config.fallback_ultra_thin_class.clone(),
         }
     }
 }

@@ -38,4 +38,12 @@ pub struct Config {
     pub validated_expiry: Duration,
     pub publish_throttle: Duration,
     pub ultra_thin_inject_headers: bool,
+    pub fallback_ultra_thin_library: Option<String>,
+    pub fallback_ultra_thin_class: Option<String>,
+}
+
+impl Config {
+    pub fn fallback_enabled(&self) -> bool {
+        self.fallback_ultra_thin_library.is_some() && self.fallback_ultra_thin_class.is_some()
+    }
 }

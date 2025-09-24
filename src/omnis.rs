@@ -1,25 +1,31 @@
 use axum::{
-    error_handling::HandleErrorLayer, extract::{OriginalUri, Request, State},
+    error_handling::HandleErrorLayer, extract::{ConnectInfo, OriginalUri, Request, State},
     response::IntoResponse,
     routing::{any, get},
     BoxError,
     Router,
 };
 use axum_response_cache::CacheLayer;
-use http::header::{
-    ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
-    PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
-    UPGRADE_INSECURE_REQUESTS,
+use base64::{engine::general_purpose::STANDARD, Engine};
+use http::{
+    header::{
+        ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
+        PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
+        UPGRADE_INSECURE_REQUESTS,
+    }, uri::{PathAndQuery, Scheme}, HeaderMap, HeaderName, HeaderValue, Method,
+    StatusCode,
+    Uri,
 };
-use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
-use std::{collections::HashSet, time::Duration};
+use std::time::Instant;
+use std::{collections::HashSet, net::SocketAddr, time::Duration, time::SystemTime};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, load_shed::LoadShedLayer, ServiceBuilder};
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info};
 
+use crate::config::Config;
 use crate::cookies::add_private_server_cookie;
 use crate::errors::Result;
 use crate::state::AppState;
@@ -27,6 +33,20 @@ use crate::upstream::{ConnectionPermit, UpstreamPool};
 use crate::waiting_room::{check_waiting_page, extract_queue_id, QueueId, WaitingRoom};
 
 lazy_static! {
+    static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
+        let mut set = HashSet::new();
+        set.insert(ACCEPT_ENCODING);
+        set.insert(CONNECTION);
+        set.insert(PROXY_AUTHENTICATE);
+        set.insert(PROXY_AUTHORIZATION);
+        set.insert(TE);
+        set.insert(TRAILER);
+        set.insert(TRANSFER_ENCODING);
+        set.insert(UPGRADE);
+        set.insert(UPGRADE_INSECURE_REQUESTS);
+
+        set
+    };
     static ref ULTRA_THIN_IGNORE: HashSet<HeaderName> = {
         let mut set = HashSet::new();
         set.insert(ACCEPT_ENCODING);
@@ -43,7 +63,7 @@ lazy_static! {
 
         set
     };
-    static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {
+    static ref RESPONSE_IGNORE: HashSet<HeaderName> = {
         let mut set = HashSet::new();
         set.insert(ACCEPT);
         set.insert(ACCEPT_ENCODING);
@@ -173,14 +193,45 @@ fn javascript_client_router<T>(state: AppState) -> Router<T> {
     jsclient_router.with_state(state.clone())
 }
 
+fn fallback_ultra_thin_router<T>(state: AppState) -> Router<T> {
+    let mut fallback_router = Router::new().fallback(any(omnis_studio_upstream));
+
+    if state.config.ultra_rate_limit_per_sec > 0 {
+        fallback_router = fallback_router.route_layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                    error!("Ultra-Thin rate limiter error: {}", err);
+                    (StatusCode::INTERNAL_SERVER_ERROR, "internal server error")
+                }))
+                .layer(BufferLayer::new(state.config.buffer_connections))
+                .layer(RateLimitLayer::new(
+                    state.config.ultra_rate_limit_per_sec,
+                    Duration::from_secs(1),
+                )),
+        );
+    }
+
+    fallback_router.with_state(state.clone())
+}
+
 // Build the router for the reverse proxy system
 pub fn router(state: AppState) -> Router {
-    Router::new()
+    // Base routing
+    let mut router = Router::new()
         .merge(cache_router(state.clone()))
         .merge(javascript_client_router(state.clone()))
-        .merge(ultra_thin_router(state.clone()))
-        .merge(api_router(state.clone()))
-        .fallback(omnis_studio_upstream)
+        .merge(api_router(state.clone()));
+
+    // Optional routing, based on configuration
+    if state.config.fallback_enabled() {
+        // Fallback is in place, so all ultra-thin routes go through the same fallback router
+        router = router.merge(fallback_ultra_thin_router(state.clone()));
+    } else {
+        // Fallback is not in place, so only ultra-thin routes are routed
+        router = router.merge(ultra_thin_router(state.clone()));
+    }
+
+    router
         .with_state(state.clone())
         .layer(CookieManagerLayer::new())
         .layer(RequestDecompressionLayer::new())
@@ -197,6 +248,7 @@ pub fn router(state: AppState) -> Router {
 
 pub async fn omnis_studio_upstream(
     State(state): State<AppState>,
+    ConnectInfo(connect_info): ConnectInfo<SocketAddr>,
     method: Method,
     cookies: Cookies,
     headers: HeaderMap,
@@ -216,7 +268,7 @@ pub async fn omnis_studio_upstream(
     // Private Cookies
     let private_cookies = cookies.private(&config.cookie_secret_key);
 
-    let connection_type = ConnectionType::new(&method, path);
+    let connection_type = ConnectionType::new(&method, path, config.fallback_enabled());
     if connection_type == ConnectionType::Reject {
         return Ok((
             StatusCode::NOT_FOUND,
@@ -284,7 +336,7 @@ pub async fn omnis_studio_upstream(
     };
 
     // Process connection permit to determine upstream URI
-    let mut upstream_uri = match connection_permit {
+    let upstream_uri = match connection_permit {
         Some(guard) => format!("{}{:?}", guard.uri, path_and_query),
         None => {
             return Ok((
@@ -295,57 +347,24 @@ pub async fn omnis_studio_upstream(
         }
     };
 
-    // Ultra-thin has special requirements for headers, as they must be appended on to the POST
-    // body or GET arguments so that Omnis has access to them
-    let body = if is_ultra_thin(path) && config.ultra_thin_inject_headers {
-        let content_type = match headers.get(CONTENT_TYPE) {
-            Some(content_type) => content_type.to_str()?,
-            None => "text/plain",
-        };
-
-        let ultra_thin_headers: Vec<String> = upstream_headers
-            .iter()
-            .filter(|(h, _)| !ULTRA_THIN_IGNORE.contains(*h))
-            .map(|(h, v)| {
-                format!(
-                    "HTTP_{}={}",
-                    h.as_str().to_uppercase().replace("-", "_"),
-                    urlencoding::encode(v.to_str().unwrap())
-                )
-            })
-            .collect();
-
-        if method == Method::GET {
-            upstream_uri = format!("{}&{}", upstream_uri, ultra_thin_headers.join("&"));
-
-            reqwest::Body::wrap_stream(request.into_body().into_data_stream())
-        } else if method == Method::POST && content_type == "application/x-www-form-urlencoded" {
-            // Remove content length header, so we can modify the POST body (reqwest will figure out the new size)
-            upstream_headers.remove(CONTENT_LENGTH);
-
-            // Read the body into a local buffer
-            let mut bytes: Vec<u8> = axum::body::to_bytes(request.into_body(), usize::MAX)
-                .await?
-                .to_vec();
-
-            // Extend the body with the modified headers
-            bytes.extend_from_slice("&".as_bytes());
-            bytes.extend_from_slice(ultra_thin_headers.join("&").as_bytes());
-
-            reqwest::Body::from(bytes)
-        } else {
-            reqwest::Body::wrap_stream(request.into_body().into_data_stream())
-        }
-    } else {
-        reqwest::Body::wrap_stream(request.into_body().into_data_stream())
-    };
+    // Build request body
+    let (upstream_method, upstream_uri, upstream_headers, upstream_body) = build_upstream_request(
+        config,
+        connect_info,
+        request,
+        path_and_query,
+        upstream_headers,
+        upstream_uri,
+    )
+    .await?;
 
     // Process Request on Upstream
+    let start = Instant::now();
     let client = &state.http_client;
     let response = client
-        .request(method.clone(), upstream_uri.clone())
-        .headers(upstream_headers)
-        .body(body)
+        .request(upstream_method.clone(), upstream_uri.clone())
+        .headers(upstream_headers.clone())
+        .body(upstream_body)
         .send()
         .await?;
 
@@ -356,9 +375,20 @@ pub async fn omnis_studio_upstream(
     };
 
     // Log upstream request
+    let log_uri: Uri = upstream_uri.parse()?;
     info!(
-        "{} {} -> {} -> {}",
-        method, path_and_query, upstream_uri, content_type
+        "{} {} -> {}://{}{}{} -> {} ({} ms)",
+        method,
+        path_and_query,
+        log_uri.scheme().unwrap_or(&Scheme::HTTP),
+        log_uri.host().unwrap_or("<unknown>"),
+        match log_uri.port() {
+            Some(port) => format!(":{port}"),
+            None => String::new(),
+        },
+        log_uri.path(),
+        content_type,
+        Instant::now().duration_since(start).as_millis()
     );
 
     // Check for queue eviction header
@@ -400,6 +430,157 @@ pub async fn omnis_studio_upstream(
     Ok((response_status, response_headers, response_body))
 }
 
+fn upstream_header_filter(entry: &(&HeaderName, &HeaderValue)) -> bool {
+    let (h, v) = entry;
+    !UPSTREAM_IGNORE.contains(*h) && !(*h).as_str().to_lowercase().starts_with("sec")
+}
+
+fn ultra_thin_header_filter(entry: &(&HeaderName, &HeaderValue)) -> bool {
+    let (h, v) = entry;
+    !ULTRA_THIN_IGNORE.contains(*h) && !(*h).as_str().to_lowercase().starts_with("sec")
+}
+
+/// Create the upstream request from the current request
+async fn build_upstream_request(
+    config: &Config,
+    connect_info: SocketAddr,
+    request: Request,
+    path_and_query: &PathAndQuery,
+    upstream_headers: HeaderMap,
+    upstream_uri: String,
+) -> Result<(Method, String, HeaderMap, reqwest::Body)> {
+    let request_method = request.method();
+    let request_headers = request.headers();
+    let request_path = path_and_query.path();
+
+    let mut upstream_uri = upstream_uri;
+    let mut upstream_headers = upstream_headers.clone();
+
+    let use_fallback = config.fallback_enabled()
+        && !is_javascript_client(request_path)
+        && !is_rest_api(request_path)
+        && !is_static_asset(request_path);
+
+    // Ultra-thin has special requirements for headers, as they must be appended on to the POST
+    // body or GET arguments so that Omnis has access to them
+    let mut upstream_method = request_method.clone();
+    let upstream_body =
+        if use_fallback || (is_ultra_thin(request_path) && config.ultra_thin_inject_headers) {
+            let content_type = match request_headers.get(CONTENT_TYPE) {
+                Some(content_type) => content_type.to_str()?,
+                None => "text/plain",
+            };
+
+            let epoch = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?;
+            let mut ultra_thin_info = vec![
+                String::from(format!("SERVER_TIME={}", epoch.as_secs())),
+                String::from(format!("HTTP_METHOD={}", request_method.as_str())),
+                String::from(format!("HTTP_PATH={}", request_path)),
+                String::from(format!("REMOTE_ADDR={}", connect_info.ip())),
+                String::from(format!("REMOTE_PORT={}", connect_info.port())),
+            ];
+            if let Some(query) = path_and_query.query() {
+                ultra_thin_info.push(format!("HTTP_QUERY={}", query));
+            }
+
+            // Inject all into the passed through values
+            let ultra_thin_headers: Vec<String> = upstream_headers
+                .iter()
+                .filter(ultra_thin_header_filter)
+                .map(|(h, v)| {
+                    format!(
+                        "HTTP_{}={}",
+                        h.as_str().to_uppercase().replace("-", "_"),
+                        urlencoding::encode(v.to_str().unwrap())
+                    )
+                })
+                .collect();
+            ultra_thin_info.extend_from_slice(&ultra_thin_headers);
+
+            if is_ultra_thin(request_path) && request_method == Method::GET {
+                // Explicit GET request to /ultra
+                upstream_uri = format!("{}&{}", upstream_uri, ultra_thin_info.join("&"));
+                reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+            } else if is_ultra_thin(request_path)
+                && request_method == Method::POST
+                && content_type == "application/x-www-form-urlencoded"
+            {
+                // Explicit POST request to /ultra
+                // Remove content length header, so we can modify the POST body (reqwest will figure out the new size)
+                upstream_headers.remove(CONTENT_LENGTH);
+                build_omnis_body(request.into_body(), &ultra_thin_info).await?
+            } else if use_fallback {
+                // Fallback to ultra-thin using
+
+                // Remove content length header, so we can modify the POST body (reqwest will figure out the new size)
+                upstream_headers.remove(CONTENT_LENGTH);
+
+                // Force upstream method to be a POST and that is form encoded
+                upstream_method = Method::POST;
+                upstream_headers.insert(CONTENT_TYPE, "application/x-www-form-urlencoded".parse()?);
+
+                let uri: Uri = upstream_uri.parse()?;
+                upstream_uri = format!(
+                    "{}://{}{}/ultra",
+                    uri.scheme().unwrap(),
+                    uri.host().unwrap(),
+                    match uri.port() {
+                        Some(p) => format!(":{}", p),
+                        None => String::new(),
+                    },
+                );
+
+                // Add additional info for the ultra-thin server (must be first in payload)
+                ultra_thin_info.insert(
+                    0,
+                    format!(
+                        "OmnisLibrary={}",
+                        config.fallback_ultra_thin_library.clone().unwrap()
+                    ),
+                );
+                ultra_thin_info.insert(
+                    1,
+                    format!(
+                        "OmnisClass={}",
+                        config.fallback_ultra_thin_class.clone().unwrap()
+                    ),
+                );
+
+                // Extract body content into bytes
+                if request_method != Method::GET {
+                    let body_bytes: Vec<u8> = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await?
+                        .to_vec();
+
+                    // Encode as base64 for processing by Ultra-Thin
+                    if !body_bytes.is_empty() {
+                        ultra_thin_info.push(format!("HTTP_BODY={}", STANDARD.encode(body_bytes)));
+                    }
+                }
+
+                build_omnis_body(axum::body::Body::from(""), &ultra_thin_info).await?
+            } else {
+                reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+            }
+        } else {
+            upstream_headers = upstream_headers
+                .iter()
+                .filter(upstream_header_filter)
+                .map(|(h, v)| (h.to_owned(), v.to_owned()))
+                .collect();
+
+            reqwest::Body::wrap_stream(request.into_body().into_data_stream())
+        };
+
+    let ret = (
+        upstream_method,
+        upstream_uri,
+        upstream_headers,
+        upstream_body,
+    );
+    Ok(ret)
+}
+
 fn is_static_asset(path: &str) -> bool {
     FAVICON_RE.is_match(path) || ASSET_RE.is_match(path)
 }
@@ -426,7 +607,7 @@ pub enum ConnectionType {
 
 impl ConnectionType {
     // Get a connection permit for the request, based on the method and path.
-    fn new(method: &Method, path: &str) -> ConnectionType {
+    fn new(method: &Method, path: &str, ultra_thin_fallback: bool) -> ConnectionType {
         if method == Method::GET && is_static_asset(path) {
             // Static assets get a fast-path, since they will be cached by this server
             ConnectionType::CacheLoad
@@ -436,7 +617,7 @@ impl ConnectionType {
         } else if is_rest_api(path) {
             // REST APIs always start with /api
             ConnectionType::Regular(WaitingRoom::Skip)
-        } else if is_ultra_thin(path) {
+        } else if is_ultra_thin(path) || ultra_thin_fallback {
             // Ultra-thin can't make any assumptions about the content, so we have to guess
             // that the page will be HTML
             if method == Method::GET {
@@ -480,4 +661,21 @@ pub async fn get_connection(
         ConnectionType::CacheLoad => pool.acquire_cache_load_permit().await,
         ConnectionType::Reject => None,
     }
+}
+
+/// Create a reqwest body that is compatible with Omnis Studio ultra-thin client
+async fn build_omnis_body(
+    body: axum::body::Body,
+    ultra_thin_info: &[String],
+) -> Result<reqwest::Body> {
+    // Read the body into a local buffer
+    let mut bytes: Vec<u8> = axum::body::to_bytes(body, usize::MAX).await?.to_vec();
+
+    // Extend the body with the modified headers
+    if !bytes.is_empty() {
+        bytes.extend_from_slice("&".as_bytes());
+    }
+    bytes.extend_from_slice(ultra_thin_info.join("&").as_bytes());
+
+    Ok(reqwest::Body::from(bytes))
 }

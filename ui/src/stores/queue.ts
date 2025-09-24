@@ -41,6 +41,8 @@ interface AppInfo {
     validated_expiry: number,
     publish_throttle: number,
     ultra_thin_inject_headers: boolean,
+    fallback_ultra_thin_library: string | null,
+    fallback_ultra_thin_class: string | null,
 }
 
 interface QueueStatus {
