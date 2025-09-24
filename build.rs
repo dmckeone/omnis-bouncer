@@ -43,12 +43,11 @@ fn main() {
         }
     }
 
-    // rebuild if build.rs is changed
+    // Hint to cargo which paths indicate a rebuild
     rerun_if_changed_paths("build.rs").unwrap();
     rerun_if_changed_paths("ui/package.json").unwrap();
     rerun_if_changed_paths("ui/pnpm-lock.yaml").unwrap();
     rerun_if_changed_paths("ui/vite.config.ts").unwrap();
-    rerun_if_changed_paths("ui/dist").unwrap();
     rerun_if_changed_paths("ui/src").unwrap();
     rerun_if_changed_paths("ui/src/**").unwrap();
 }
