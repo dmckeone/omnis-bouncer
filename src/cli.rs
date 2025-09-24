@@ -160,6 +160,15 @@ pub struct RunArgs {
     )]
     pub queue_size_cookie_name: String,
 
+    /// Name to use for the header that indicates if the ID for the request should be evicted
+    /// from the store
+    #[arg(
+        long,
+        default_value = "x-omnis-bouncer-id-evict",
+        env = "OMNIS_BOUNCER_UPSTREAM_HTTP_HEADER_ID_EVICT_NAME"
+    )]
+    pub id_evict_upstream_http_header: String,
+
     /// Name to use for the header that stores the queue ID sent to Omnis Studio
     #[arg(
         long,
@@ -379,6 +388,7 @@ impl TryFrom<&RunArgs> for Config {
             position_cookie_name: args.position_cookie_name.clone(),
             queue_size_cookie_name: args.queue_size_cookie_name.clone(),
             id_upstream_http_header: args.id_upstream_http_header.to_lowercase(), // Must be lowercase
+            id_evict_upstream_http_header: args.id_evict_upstream_http_header.to_lowercase(), // Must be lowercase
             position_http_header: args.position_http_header.to_lowercase(), // Must be lowercase
             queue_size_http_header: args.queue_size_http_header.to_lowercase(), // Must be lowercase
             acquire_timeout: Duration::from_secs(args.acquire_timeout),
