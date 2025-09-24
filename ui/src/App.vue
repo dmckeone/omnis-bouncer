@@ -39,7 +39,7 @@ const enabled_description = computed(() => {
         </StatPanel>
         <StatPanel
             title="Store Capacity"
-            :value="status.store_capacity"
+            :value="status.store_capacity == -1 ? '∞' : status.store_capacity"
             class="text-info"
         >
           <template #figure>

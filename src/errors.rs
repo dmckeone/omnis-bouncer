@@ -30,10 +30,24 @@ impl IntoResponse for Error {
         match self {
             Error::QueueEventLost(e) => error!("Error emitting queue broadcast: {}", e),
             Error::ControlUIAppMissing => error!("Control WebUI files cannot be found"),
-            Error::QueueEnabledOutOfRange(size) => error!("queue enabled out of range: {}", size),
-            Error::StoreCapacityOutOfRange(size) => error!("store capacity out of range: {}", size),
-            Error::QueueSyncTimestampOutOfRange(size) => {
-                error!("queue sync timestamp out of range: {}", size)
+            Error::QueueEnabledOutOfRange(enabled) => {
+                error!("queue enabled out of range: {}", enabled);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "queue enabled out of range".to_string(),
+                )
+                    .into_response();
+            }
+            Error::StoreCapacityOutOfRange(size) => {
+                error!("store capacity out of range: {}", size);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    "store capacity out of range".to_string(),
+                )
+                    .into_response();
+            }
+            Error::QueueSyncTimestampOutOfRange(timestamp) => {
+                error!("queue sync timestamp out of range: {}", timestamp)
             }
             Error::RedisTimeIsNil => error!("redis time is incorrectly returning nil"),
             Error::RedisScriptUnreadable(script) => error!("script unreadable: {}", script),

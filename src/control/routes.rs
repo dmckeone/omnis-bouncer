@@ -327,7 +327,9 @@ async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings>> {
     description = "Alter queue settings.  Missing keys and nil are treated equally, and do not affect the current running state.",
     request_body = SettingsPatch,
     responses(
-        (status = 200, description = "OK", body = Settings)
+        (status = 200, description = "OK", body = Settings),
+        (status = 400, description = "Bad Request", body = String, example = "store capacity out of range"),
+        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: queue_enabled: invalid type: integer `10`, expected a boolean at line 1 column 20"),
     )
 )]
 async fn patch_settings(
@@ -402,9 +404,10 @@ async fn get_upstreams(State(state): State<AppState>) -> Json<Vec<Upstream>> {
     tag = "queue",
     summary = "Add Upstream Servers",
     description = "Add one or more upstream Omnis Studio servers",
-    request_body = Upstream,
+    request_body = [Upstream],
     responses(
-        (status = 201, description = "Created")
+        (status = 201, description = "Created"),
+        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
     )
 )]
 async fn add_upstreams(
@@ -427,9 +430,10 @@ async fn add_upstreams(
     tag = "queue",
     summary = "Remove Upstream Servers",
     description = "Remove one or more upstream Omnis Studio servers",
-    request_body = UpstreamRemove,
+    request_body = [UpstreamRemove],
     responses(
-        (status = 200, description = "OK")
+        (status = 200, description = "OK"),
+        (status = 422, description = "Unprocessable Entity", body = String, example = "Failed to deserialize the JSON body into the target type: [0].connections: invalid type: string \"whoopsie\", expected usize at line 2 column 27"),
     )
 )]
 async fn remove_upstreams(
