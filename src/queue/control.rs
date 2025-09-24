@@ -4,12 +4,15 @@ use futures_util::Stream;
 use lazy_static::lazy_static;
 use minify_html_onepass::{copy as minify, Cfg};
 use redis::{self, pipe, AsyncTypedCommands};
-use std::sync::Arc;
+use std::collections::HashSet;
 use std::{
     collections::HashMap,
+    sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::time::sleep_until;
 use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
 use tracing::error;
 use uuid::Uuid;
@@ -85,13 +88,64 @@ impl QueueEvents {
         Some(event)
     }
 
-    /// Convert the subscriber into a stream
+    /// Convert the subscriber into a debounced stream
     pub fn into_stream(self) -> impl Stream<Item = QueueEvent> {
         let broadcast_stream = self.subscriber.stream();
         let queue_event_stream = broadcast_stream.filter_map(Self::stream_filter);
 
         // Deduplicate events across a period of time
         debounce(DEBOUNCE_INTERVAL, queue_event_stream)
+    }
+
+    /// Receiver for debounced queue events
+    pub fn receiver(&self, cancel: Arc<Notify>) -> Receiver<QueueEvent> {
+        let mut subscriber_receiver = self.subscriber.receiver();
+
+        let (sender, receiver) = broadcast::channel(100);
+
+        tokio::spawn(async move {
+            // Bookkeeping of unique items and last poll time
+            let mut last_poll = Instant::now();
+            let mut items: HashSet<QueueEvent> = HashSet::new();
+            loop {
+                tokio::select! {
+                    _ = cancel.notified() => {
+                        break;
+                    },
+                    _ = sleep_until((last_poll + DEBOUNCE_INTERVAL).into()) => {
+                        for queue_event in items.into_iter() {
+                            if let Err(error) = sender.send(queue_event) {
+                                error!("Failed to send queue event: {:?}", error);
+                            }
+                        }
+
+                        last_poll = Instant::now();
+                        items = HashSet::new();
+                    }
+                    event = subscriber_receiver.recv() => {
+                        let event = match event {
+                            Ok(event) => event,
+                            Err(err) => {
+                                error!("Failed to parse Redis event: {:?}", err);
+                                continue
+                            }
+                        };
+
+                        let queue_event = match QueueEvent::try_from(event.as_str()) {
+                            Ok(queue_event) => queue_event,
+                            Err(err) => {
+                                error!("Failed to parse Redis event: {:?}", err);
+                                continue
+                            }
+                        };
+
+                        items.insert(queue_event);
+                    }
+                }
+            }
+        });
+
+        receiver
     }
 }
 

@@ -200,7 +200,7 @@ pub async fn omnis_studio_upstream(
     // Private Cookies
     let private_cookies = cookies.private(&config.cookie_secret_key);
 
-    let connection_type = ConnectionType::new(&method, &headers, path);
+    let connection_type = ConnectionType::new(&method, path);
     if connection_type == ConnectionType::Reject {
         return Ok((
             StatusCode::NOT_FOUND,
@@ -333,7 +333,7 @@ pub enum ConnectionType {
 
 impl ConnectionType {
     // Get a connection permit for the request, based on the method and path.
-    fn new(method: &Method, headers: &HeaderMap, path: &str) -> ConnectionType {
+    fn new(method: &Method, path: &str) -> ConnectionType {
         if method == Method::GET && is_static_asset(path) {
             // Static assets get a fast-path, since they will be cached by this server
             ConnectionType::CacheLoad

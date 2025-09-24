@@ -1,5 +1,10 @@
+use axum::routing::any;
 use axum::{
-    extract::State, response::{
+    extract::{
+        ws::{self, WebSocketUpgrade},
+        State,
+    }, http::Version,
+    response::{
         sse::{Event as SSEvent, KeepAlive, Sse},
         Response,
     },
@@ -27,8 +32,9 @@ use crate::constants::{
 use crate::control::models::{
     Config, Event, Settings, SettingsPatch, Status, Upstream, UpstreamRemove,
 };
+
 use crate::errors::{Error, Result};
-use crate::queue::StoreCapacity;
+use crate::queue::{QueueEvent, StoreCapacity};
 use crate::secrets::encode_master_key;
 use crate::signals::cancellable;
 use crate::state::AppState;
@@ -40,6 +46,7 @@ use crate::constants::LOCALHOST_CORS_DEBUG_URI;
 use http::Method;
 #[cfg(debug_assertions)]
 use tower_http::cors::CorsLayer;
+use tracing::{debug, error};
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -112,6 +119,7 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(get_settings, patch_settings))
         .routes(routes!(get_upstreams, add_upstreams, remove_upstreams))
         .routes(routes!(get_server_sent_events))
+        .route("/api/ws", any(get_web_socket))
         .nest_service("/favicon.ico", favicon_service)
         .nest_service("/static", static_service)
         .nest_service("/assets", asset_service);
@@ -465,4 +473,56 @@ async fn control_ui_handler() -> Result<Response<axum::body::Body>> {
         .body(axum::body::Body::from(UI_INDEX))?;
 
     Ok(response)
+}
+
+// TOOD: Build web socket with event stream
+async fn get_web_socket(
+    ws: WebSocketUpgrade,
+    version: Version,
+    State(state): State<AppState>,
+) -> axum::response::Response {
+    tracing::debug!("accepted a WebSocket using {version:?}");
+    let state = state.clone();
+    let cancel = state.shutdown_notifier.clone();
+
+    // Create stream of Queue events
+    let subscriber = state.queue_events.clone();
+    let mut receiver = subscriber.receiver(cancel.clone());
+
+    ws.on_upgrade(|mut ws| async move {
+        loop {
+            tokio::select! {
+                // Since `ws` is a `Stream`, it is by nature cancel-safe.
+                _ = cancel.notified() => {
+                    break;
+                },
+                res = ws.recv() => {
+                    // Receive data from web socket
+                    match res {
+                        Some(Ok(ws::Message::Text(s))) => {
+                            error!("Received unexpected message from web socket: {}", s)
+                        },
+                        Some(Ok(_)) => {}
+                        Some(Err(error)) => debug!("client disconnected abruptly: {error}"),
+                        None => break,
+                    }
+                },
+                queue_event = receiver.recv() => {
+                    // Push data to web socket
+                    let queue_event = match queue_event {
+                        Ok(queue_event) => queue_event,
+                        Err(err) => {
+                            error!("Failed to parse queue event: {:?}", err);
+                            continue
+                        }
+                    };
+
+                    let payload = String::from(Event::from(queue_event));
+                    if let Err(error) =  ws.send(ws::Message::Text(payload.into())).await {
+                        debug!("client disconnected abruptly: {}", error);
+                    }
+                }
+            }
+        }
+    })
 }

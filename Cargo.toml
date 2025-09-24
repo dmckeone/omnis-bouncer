@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-axum = { version = "0.8", features = ["http2", "multipart"] }
+axum = { version = "0.8", features = ["http2", "multipart", "ws"] }
 axum-extra = { version = "0.10", features = ["cookie", "cookie-key-expansion", "cookie-private", "cookie-signed"] }
 axum-response-cache = "0.4"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
