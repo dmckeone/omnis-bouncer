@@ -56,7 +56,6 @@ pub fn waiting_page_key(prefix: impl Into<String>) -> String {
 
 pub struct Scripts {
     check_sync_keys: Script,
-    has_ids: Script,
     id_position: Script,
     id_remove: Script,
     queue_timeout: Script,
@@ -82,7 +81,6 @@ impl Scripts {
     pub fn new() -> Result<Self> {
         let functions = Self {
             check_sync_keys: Self::read("check_sync_keys")?,
-            has_ids: Self::read("has_ids")?,
             id_position: Self::read("id_position")?,
             id_remove: Self::read("id_remove")?,
             queue_timeout: Self::read("queue_timeout")?,
@@ -95,7 +93,6 @@ impl Scripts {
 
     pub async fn init(&self, conn: &mut Connection) -> Result<()> {
         self.check_sync_keys.load_async(conn).await?;
-        self.has_ids.load_async(conn).await?;
         self.id_position.load_async(conn).await?;
         self.id_remove.load_async(conn).await?;
         self.queue_timeout.load_async(conn).await?;
@@ -117,19 +114,6 @@ impl Scripts {
             0 => Ok(false),
             val => {
                 let msg = format!("Unexpected result from \"check_sync_keys\": {}", val);
-                Err(Error::RedisScriptUnreadable(msg))
-            }
-        }
-    }
-
-    /// Return true if the store or queue has any UUIDs, false if both the queue and store are empty
-    pub async fn has_ids(&self, conn: &mut Connection, prefix: impl Into<String>) -> Result<bool> {
-        let prefix = prefix.into();
-        match self.has_ids.arg(&prefix).invoke_async(conn).await? {
-            1 => Ok(true),
-            0 => Ok(false),
-            val => {
-                let msg = format!("Unexpected result from \"has_ids\": {}", val);
                 Err(Error::RedisScriptUnreadable(msg))
             }
         }
@@ -259,7 +243,6 @@ mod test {
     fn test_read_scripts() {
         let scripts = &[
             "check_sync_keys",
-            "has_ids",
             "id_position",
             "id_remove",
             "queue_timeout",

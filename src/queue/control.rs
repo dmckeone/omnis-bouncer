@@ -541,11 +541,6 @@ impl QueueControl {
         self.scripts.check_sync_keys(&mut conn, prefix).await
     }
 
-    pub async fn has_ids(&self, prefix: impl Into<String>) -> Result<bool> {
-        let mut conn = self.conn().await?;
-        self.scripts.has_ids(&mut conn, prefix).await
-    }
-
     /// Return the position of a UUID in the queue, or add the UUID to the queue and then
     /// return the position if the UUID does not already exist in the queue
     pub async fn id_position(
@@ -1168,64 +1163,6 @@ mod test {
             .expect("Failed to call check_sync_keys");
 
         assert_eq!(actual, true);
-
-        clean_keys(prefix).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_has_ids_true_queue() {
-        let prefix = "test_has_ids_true_queue";
-
-        let (queue, mut conn) = test_queue_conn().await;
-        push_queue_ids(prefix, &queue, &mut conn, 1).await;
-
-        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
-
-        assert!(actual);
-
-        clean_keys(prefix).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_has_ids_true_store() {
-        let prefix = "test_has_ids_true_store";
-
-        let (queue, mut conn) = test_queue_conn().await;
-        push_store_ids(prefix, &queue, &mut conn, 1).await;
-
-        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
-        assert_eq!(actual, true);
-
-        clean_keys(prefix).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_has_ids_true_both() {
-        let prefix = "test_has_ids_true_both";
-
-        let (queue, mut conn) = test_queue_conn().await;
-        push_store_ids(prefix, &queue, &mut conn, 1).await;
-        push_queue_ids(prefix, &queue, &mut conn, 1).await;
-
-        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
-        assert_eq!(actual, true);
-
-        clean_keys(prefix).await;
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn test_has_ids_false() {
-        let prefix = "test_has_ids_false";
-
-        let (queue, mut conn) = test_queue_conn().await;
-        clear_store(prefix, &mut conn).await;
-
-        let actual = queue.has_ids(prefix).await.expect("Failed to call has_ids");
-        assert_eq!(actual, false);
 
         clean_keys(prefix).await;
     }
