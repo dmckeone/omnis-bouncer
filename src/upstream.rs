@@ -39,6 +39,16 @@ impl From<&UpstreamServer> for Upstream {
     }
 }
 
+impl Default for Upstream {
+    fn default() -> Self {
+        Self {
+            uri: String::new(),
+            connections: 100,
+            sticky_sessions: 10,
+        }
+    }
+}
+
 /// Guard that contains the locked URI that can be used for a single reverse proxy call,
 /// when the guard is dropped, the permit for that URI is dropped along with it.
 pub struct ConnectionPermit {

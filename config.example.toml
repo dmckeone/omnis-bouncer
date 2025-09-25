@@ -1,0 +1,119 @@
+# Name of the app in all UI
+#name = "Omnis Bouncer"
+
+# Master key (in base64) for cookie encryption.  Generate with `omnis-bouncer generate-key`
+#cookie_key = "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ=="
+
+# URI for connecting to Redis
+#redis_uri = "redis://127.0.0.1"
+
+# Initial upstream servers
+#initial_upstream = [
+#    { uri = "http://127.0.0.1:5912", connections = 100, sticky_sessions = 10 },
+#    { uri = "http://127.0.0.1:5913", connections = 100, sticky_sessions = 10 }
+#]
+
+# Path to the TLS Private Key to use for the publicly accessible server
+#public_tls_key_path = "/path/to/server.key"
+
+# Path to the TLS Public Certificate to use for the publicly accessible server
+#public_tls_certificate_path = "/path/to/server.crt"
+
+# Path to the TLS Private Key to use for the monitor and control server
+#monitor_tls_key_path = "/path/to/server.key"
+
+# Path to the TLS Public Certificate to use for the monitor and control server
+#monitor_tls_certificate_path = "/path/to/server.crt"
+
+# Name to use for the cookie that stores the queue unique identifier
+#id_cookie_name = "omnis-bouncer-id"
+
+# Name to use for the cookie that stores the queue position
+#position_cookie_name = "omnis-bouncer-queue-position"
+
+# Name to use for the cookie that stores the queue size
+#queue_size_cookie_name = "omnis-bouncer-queue-size"
+
+# Name to use for the header that indicates if the ID for the request should be evicted
+#id_evict_upstream_http_header = "x-omnis-bouncer-id-evict"
+
+# Name to use for the header that stores the queue ID sent to Omnis Studio
+#id_upstream_http_header = "x-omnis-bouncer-id"
+
+# Name to use for the header that stores the queue position
+#position_http_header = "x-omnis-bouncer-queue-position"
+
+# Name to use for the header that stores the queue size
+#queue_size_http_header = "x-omnis-bouncer-queue-size"
+
+# Timeout (in seconds) when acquiring a connection from the pool
+#acquire_timeout = 10
+
+# Timeout (in seconds) when connecting to an upstream server
+#connect_timeout = 10
+
+# Expiration (in seconds) for the cookie that stores the queue identifier
+#cookie_id_expiration = 86400
+
+# Timeout (in seconds) for sticky sessions to be maintained until they are evicted
+#sticky_session_timeout = 600
+
+# Timeout (in seconds) for caching assets from upstream servers
+#asset_cache_secs = 60
+
+# Number of connections to buffer while instituting rate limiting (if rate limiting enabled)
+#buffer_connections = 1000
+
+# Number of requests per second that can be received for the Javascript Client before being rate limited
+#js_client_rate_limit_per_sec = 0
+
+# Number of requests per second that can be received for the API server before being rate limited
+#api_rate_limit_per_sec = 5
+
+# Number of requests per second that can be received for the Ultra-thin server before being rate limited
+#ultra_rate_limit_per_sec = 0
+
+# HTTP port to listen for requests from the public (they will be upgraded to the HTTPS port)
+#public_http_port = 3000
+
+# HTTPS port to listen for requests from the public
+#public_https_port = 3001
+
+# HTTPS port to listen for requests for monitor and control
+#monitor_https_port = 2999
+
+# Set the queue to be enabled if starting up and no values are stored in Redis
+#queue_enabled = true
+
+# Enable queue rotation at a regular interval, while this server is running.  Only a single
+# server needs to enable queue rotation if running multiple servers
+#queue_rotation_enabled = true
+
+# Set the store capacity to this value if starting up and no values are stored in Redis
+#store_capacity = 5
+
+# Prefix to use for all keys in Redis when storing data
+#redis_prefix = "omnis_bouncer"
+
+# Quarantine period (in secs) to allow a user to initiate another request before being evicted
+# from the queue or store.
+#quarantine_expiry = 45
+
+# Validated period (in secs) to allow a user to complete their session before evicting them
+# from the queue or store.
+#validated_expiry = 600,
+
+# Maximum frequency (in milliseconds) that the same event will be published to Redis from
+# this server
+#publish_throttle = 100,
+
+# Convert headers into arguments for Ultra-Thin requests
+#ultra_thin_inject_headers = true,
+
+# Omnis Studio library to use as a fallback for requests that aren't routed directly to
+# /ultra.  Must be used in conjunction with fallback_ultra_thin_class.
+#fallback_ultra_thin_library =
+
+# Omnis Studio remote task class to use as a fallback for requests that aren't routed
+# directly to /ultra.  Must be used in conjunction with fallback_ultra_thin_library.
+#fallback_ultra_thin_class = 

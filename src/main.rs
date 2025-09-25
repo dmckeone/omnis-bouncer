@@ -25,7 +25,7 @@ use tracing::{error, info, Level};
 
 use crate::certs::{write_pem, write_pfx};
 use crate::cli::{parse_cli, Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs};
-use crate::config::Config;
+use crate::config::{read_config_file, Config};
 use crate::secrets::encode_master_key;
 
 /// Main entry point for app
@@ -49,9 +49,18 @@ fn main() {
 
 /// Run the main server
 fn run_server(args: &RunArgs) {
-    // Build config
+    // Build Config
     let config = match Config::try_from(args) {
-        Ok(config) => config,
+        Ok(config) => match &args.config_file {
+            Some(path) => match read_config_file(path, config) {
+                Ok(config) => config,
+                Err(err) => {
+                    error!("Failed to read configuration file: {}", err);
+                    return;
+                }
+            },
+            None => config,
+        },
         Err(err) => {
             error!("Failed to read configuration: {:?}", err);
             return;
