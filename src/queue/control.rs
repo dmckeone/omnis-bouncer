@@ -6,12 +6,11 @@ use lazy_static::lazy_static;
 use minify_html_onepass::{copy as minify, Cfg};
 use redis::{self, pipe, AsyncTypedCommands};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::broadcast::Receiver;
-use tokio::sync::{broadcast, Notify, RwLock};
+use tokio::sync::{broadcast, broadcast::Receiver, Notify, RwLock};
 use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
 use tracing::error;
 use uuid::Uuid;
@@ -135,7 +134,7 @@ pub struct QueueControl {
     scripts: Scripts,
     publish_throttle: Duration,
     throttle_buffer: RwLock<HashMap<QueueEvent, Instant>>,
-    waiting_page_cache: RwLock<HashMap<String, String>>,
+    waiting_page_cache: RwLock<HashMap<(String, String), String>>,
 }
 
 impl QueueControl {
@@ -163,13 +162,16 @@ impl QueueControl {
         prefix: impl Into<String>,
         enabled: bool,
         store_capacity: StoreCapacity,
+        locales: &HashSet<String>,
     ) -> Result<()> {
         let prefix = prefix.into();
 
         let mut conn = self.conn().await?;
         self.scripts.init(&mut conn).await?;
         self.verify_keys(&prefix, enabled, store_capacity).await?;
-        self.verify_waiting_page(&prefix).await;
+        for locale in locales.iter() {
+            self.verify_waiting_page(&prefix, locale).await;
+        }
         Ok(())
     }
 
@@ -383,17 +385,26 @@ impl QueueControl {
         Ok(())
     }
 
-    pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
+    pub async fn waiting_page(
+        &self,
+        prefix: impl Into<String>,
+        locale: impl Into<String>,
+    ) -> Result<Option<String>> {
         let prefix = prefix.into();
+        let locale = locale.into();
 
         let mut conn = self.conn().await?;
-        let result = conn.get(waiting_page_key(&prefix)).await?;
+        let result = conn.hget(waiting_page_key(&prefix), locale).await?;
 
         Ok(result)
     }
 
-    pub async fn waiting_page_or_default(&self, prefix: impl Into<String>) -> Result<String> {
-        let page = match self.waiting_page(prefix).await? {
+    pub async fn waiting_page_or_default(
+        &self,
+        prefix: impl Into<String>,
+        locale: impl Into<String>,
+    ) -> Result<String> {
+        let page = match self.waiting_page(prefix, locale).await? {
             Some(waiting_page) => waiting_page.clone(),
             None => (*DefaultWaitingPage).clone(),
         };
@@ -404,13 +415,16 @@ impl QueueControl {
     pub async fn set_waiting_page(
         &self,
         prefix: impl Into<String>,
+        locale: impl Into<String>,
         waiting_page: impl Into<String>,
     ) -> Result<()> {
         let prefix = prefix.into();
+        let locale = locale.into();
         let waiting_page = waiting_page.into();
 
         let mut conn = self.conn().await?;
-        conn.set(waiting_page_key(&prefix), waiting_page).await?;
+        conn.hset(waiting_page_key(&prefix), locale, waiting_page)
+            .await?;
 
         self.emit(&mut conn, &prefix, QueueEvent::WaitingPageChanged, None)
             .await;
@@ -418,11 +432,18 @@ impl QueueControl {
         Ok(())
     }
 
-    pub async fn cached_waiting_page(&self, prefix: impl Into<String>) -> String {
+    pub async fn cached_waiting_page(
+        &self,
+        prefix: impl Into<String>,
+        locale: impl Into<String>,
+    ) -> String {
         let prefix = prefix.into();
+        let locale = locale.into();
+        let cache_key = (prefix, locale);
+
         let guard = self.waiting_page_cache.read().await;
 
-        match (*guard).get(&prefix) {
+        match (*guard).get(&cache_key) {
             Some(waiting_page) => waiting_page.clone(),
             None => (*DefaultWaitingPage).clone(),
         }
@@ -437,23 +458,22 @@ impl QueueControl {
         }
 
         match minify(page.as_bytes(), &minfiy_cfg) {
-            Ok(bytes) => match String::from_utf8(bytes) {
-                Ok(_) => true,
-                Err(_) => false,
-            },
+            Ok(bytes) => String::from_utf8(bytes).is_ok(),
             Err(_) => false,
         }
     }
 
-    pub async fn verify_waiting_page(&self, prefix: impl Into<String>) {
+    pub async fn verify_waiting_page(&self, prefix: impl Into<String>, locale: impl Into<String>) {
         let prefix = prefix.into();
+        let locale = locale.into();
+        let cache_key = (prefix.clone(), locale.clone());
 
         let cached = {
             let guard = self.waiting_page_cache.read().await;
-            (*guard).get(&prefix).cloned()
+            (*guard).get(&cache_key).cloned()
         };
 
-        let current = match self.waiting_page(&prefix).await {
+        let current = match self.waiting_page(&prefix, &locale).await {
             Ok(Some(waiting_page)) => match minify(waiting_page.as_bytes(), &minfiy_cfg) {
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(minified) => Some(minified),
@@ -481,8 +501,8 @@ impl QueueControl {
             // Cache invalid, get write lock update to latest version
             let mut guard = self.waiting_page_cache.write().await;
             match current {
-                Some(waiting_page) => (*guard).insert(prefix.clone(), waiting_page),
-                None => (*guard).remove(&prefix),
+                Some(waiting_page) => (*guard).insert(cache_key, waiting_page),
+                None => (*guard).remove(&cache_key),
             };
         }
     }
@@ -810,10 +830,11 @@ mod test {
     #[traced_test]
     async fn test_init() {
         let prefix = "test_init";
+        let locales: HashSet<String> = vec![String::from("en")].into_iter().collect();
 
         let queue = test_queue();
         queue
-            .init(prefix, false, StoreCapacity::Unlimited)
+            .init(prefix, false, StoreCapacity::Unlimited, &locales)
             .await
             .expect("QueueControl::init() failed");
 
@@ -1087,15 +1108,16 @@ mod test {
 
         let queue = test_queue();
 
+        let locale = String::from("en");
         let expected = "My Waiting Page";
 
         queue
-            .set_waiting_page(prefix, expected)
+            .set_waiting_page(prefix, &locale, expected)
             .await
             .expect("Failed to call set_waiting_page");
 
         let actual = queue
-            .waiting_page(prefix)
+            .waiting_page(prefix, &locale)
             .await
             .expect("Failed to call waiting_page")
             .expect("waiting page is None");

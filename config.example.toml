@@ -1,6 +1,12 @@
 # Name of the app in all UI
 #name = "Omnis Bouncer"
 
+# Default language to use if a language is not found
+#languages = "en"
+
+# Languages supported for the waiting room page
+#languages = ["en", "de", "fr"]
+
 # Master key (in base64) for cookie encryption.  Generate with `omnis-bouncer generate-key`
 #cookie_key = "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ=="
 

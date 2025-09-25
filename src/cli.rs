@@ -1,4 +1,5 @@
 use clap::{ArgAction, Args, Parser, Subcommand};
+use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::config::{build_tls_pair, Config};
@@ -39,6 +40,26 @@ pub struct RunArgs {
         env = "OMNIS_BOUNCER_NAME"
     )]
     pub name: String,
+
+    /// Default locale (language) to use when one can not be selected
+    #[arg(
+        long,
+        conflicts_with = "config_file",
+        default_value = "en",
+        env = "OMNIS_BOUNCER_DEFAULT_LOCALE"
+    )]
+    pub default_locale: String,
+
+    /// Locales (Languages) supported for the waiting room page
+    #[arg(
+        long,
+        conflicts_with = "config_file",
+        num_args = 0..,
+        value_delimiter = ',',
+        default_value = "en",
+        env = "OMNIS_BOUNCER_LOCALES"
+    )]
+    pub locales: Vec<String>,
 
     /// Master key (in base64) for cookie encryption
     #[arg(long, conflicts_with = "config_file", env = "OMNIS_BOUNCER_COOKIE_KEY")]
@@ -446,6 +467,12 @@ impl TryFrom<&RunArgs> for Config {
     fn try_from(args: &RunArgs) -> Result<Self> {
         let config = Config {
             app_name: args.name.clone(),
+            default_locale: args.default_locale.clone(),
+            locales: args
+                .locales
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect::<HashSet<String>>(),
             cookie_secret_key: match &args.cookie_key {
                 Some(key) => decode_master_key(key)?,
                 None => axum_extra::extract::cookie::Key::generate(),

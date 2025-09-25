@@ -28,6 +28,7 @@ use tracing::{error, info};
 use crate::config::Config;
 use crate::cookies::add_private_server_cookie;
 use crate::errors::Result;
+use crate::locales::header_locale;
 use crate::state::AppState;
 use crate::upstream::{ConnectionPermit, UpstreamPool};
 use crate::waiting_room::{check_waiting_page, extract_queue_id, QueueId, WaitingRoom};
@@ -265,6 +266,9 @@ pub async fn omnis_studio_upstream(
     let path_and_query = uri.path_and_query().unwrap();
     let path = path_and_query.path();
 
+    // Select locale from Accept-Language
+    let locale = header_locale(&headers, &config.locales, &config.default_locale);
+
     // Private Cookies
     let private_cookies = cookies.private(&config.cookie_secret_key);
 
@@ -299,7 +303,7 @@ pub async fn omnis_studio_upstream(
 
         // Check if the use is in the store
         if let Some((waiting_headers, waiting_body)) =
-            check_waiting_page(config, &cookies, queue, queue_id).await?
+            check_waiting_page(config, &cookies, &locale, queue, queue_id).await?
         {
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,

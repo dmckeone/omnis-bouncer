@@ -67,9 +67,12 @@ pub fn extract_queue_id(queue: &QueueControl, cookie: &Option<Cookie>) -> QueueI
 pub async fn check_waiting_page(
     config: &Config,
     cookies: &Cookies,
+    locale: impl Into<String>,
     queue: &QueueControl,
     queue_id: QueueId,
 ) -> errors::Result<Option<(HeaderMap, axum::body::Body)>> {
+    let locale = locale.into();
+
     let queue_prefix = config.queue_prefix.clone();
 
     let position = queue
@@ -91,8 +94,10 @@ pub async fn check_waiting_page(
     let mut waiting_headers = HeaderMap::new();
     waiting_headers.insert(CONTENT_TYPE, "text/html".parse()?);
 
-    let waiting_page_body: axum::body::Body =
-        queue.cached_waiting_page(queue_prefix.clone()).await.into();
+    let waiting_page_body: axum::body::Body = queue
+        .cached_waiting_page(queue_prefix.clone(), &locale)
+        .await
+        .into();
 
     waiting_headers.insert(
         HeaderName::from_lowercase(config.position_http_header.as_bytes())?,

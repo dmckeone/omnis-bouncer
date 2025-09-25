@@ -38,17 +38,14 @@ async fn queue_tasks(state: AppState) {
     state.queue.flush_event_throttle_buffer(None).await;
 
     // Verify waiting page
-    state
-        .queue
-        .verify_waiting_page(state.config.queue_prefix.clone())
-        .await;
+    let queue_prefix = state.config.queue_prefix.clone();
+    for locale in state.config.locales.iter() {
+        state.queue.verify_waiting_page(&queue_prefix, locale).await;
+    }
 
     if state.config.queue_rotation_enabled {
         // Queue rotation
-        let result = state
-            .queue
-            .rotate_full(state.config.queue_prefix.clone(), None)
-            .await;
+        let result = state.queue.rotate_full(&queue_prefix, None).await;
 
         match result {
             Ok(rotate) => {

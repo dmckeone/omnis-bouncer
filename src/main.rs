@@ -8,6 +8,7 @@ mod control;
 mod cookies;
 mod database;
 mod errors;
+mod locales;
 mod omnis;
 mod queue;
 mod secrets;

@@ -50,6 +50,7 @@ use tower_http::cors::CorsLayer;
 
 #[cfg(debug_assertions)]
 use crate::constants::LOCALHOST_CORS_DEBUG_URI;
+use crate::locales::header_locale;
 
 #[derive(OpenApi)]
 #[openapi(info(
@@ -121,6 +122,7 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(get_upstreams, add_upstreams, remove_upstreams))
         .routes(routes!(get_status))
         .routes(routes!(get_settings, patch_settings))
+        .routes(routes!(get_waiting_page_accept_language))
         .routes(routes!(get_waiting_page, set_waiting_page))
         .routes(routes!(get_queue_id, add_queue_id, delete_queue_id))
         .routes(routes!(get_server_sent_events))
@@ -456,24 +458,12 @@ async fn patch_settings(
     Ok(Json(Settings::from(queue_settings)))
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/waiting_page",
-    tag = "queue",
-    summary = "Get Waiting Page",
-    description = "Get or view the current waiting page, along with mock cookies/headers for testing",
-    responses(
-        (status = 200, description = "OK"),
-    ),
-    params(
-        ("position" = u64, Query, description = "position in the store (for testing)"),
-        ("size" = u64, Query, description = "size of the store (for testing)"),
-    )
-)]
-async fn get_waiting_page(
-    State(state): State<AppState>,
-    cookies: Cookies,
-    Query(params): Query<HashMap<String, String>>,
+// Waiting page response to allow for default and specific locale waiting page
+async fn waiting_page_response(
+    state: AppState,
+    cookies: &Cookies,
+    params: &HashMap<String, String>,
+    locale: impl Into<String>,
 ) -> Result<(HeaderMap, Html<String>)> {
     let state = state.clone();
     let config = &state.config;
@@ -489,12 +479,8 @@ async fn get_waiting_page(
     };
 
     // Add fake cookies
-    cookies::add_browser_cookie(
-        &cookies,
-        config.position_cookie_name.clone(),
-        &test_position,
-    );
-    cookies::add_browser_cookie(&cookies, config.queue_size_cookie_name.clone(), &test_size);
+    cookies::add_browser_cookie(cookies, config.position_cookie_name.clone(), &test_position);
+    cookies::add_browser_cookie(cookies, config.queue_size_cookie_name.clone(), &test_size);
 
     // Add fakes headers
     let mut headers = HeaderMap::new();
@@ -509,13 +495,67 @@ async fn get_waiting_page(
 
     Ok((
         headers,
-        Html(queue.waiting_page_or_default(&config.queue_prefix).await?),
+        Html(
+            queue
+                .waiting_page_or_default(&config.queue_prefix, locale)
+                .await?,
+        ),
     ))
 }
 
 #[utoipa::path(
-    patch,
+    get,
+    path = "/api/waiting_page/{locale}",
+    tag = "queue",
+    summary = "Get Waiting Page",
+    description = "Get or view the current waiting page, along with mock cookies/headers for testing",
+    responses(
+        (status = 200, description = "OK"),
+    ),
+    params(
+        ("locale" = String, Path, description = "locale to view for the store"),
+        ("position" = u64, Query, description = "position in the store (for testing)"),
+        ("size" = u64, Query, description = "size of the store (for testing)"),
+    )
+)]
+async fn get_waiting_page(
+    State(state): State<AppState>,
+    cookies: Cookies,
+    Path(locale): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<(HeaderMap, Html<String>)> {
+    let locale = locale.to_lowercase();
+    waiting_page_response(state, &cookies, &params, locale).await
+}
+
+#[utoipa::path(
+    get,
     path = "/api/waiting_page",
+    tag = "queue",
+    summary = "Get Waiting Page (Accept-Language)",
+    description = "Get or view the current waiting page in the preferred Accept-Language header, along with mock cookies/headers for testing",
+    responses(
+        (status = 200, description = "OK"),
+    ),
+    params(
+        ("position" = u64, Query, description = "position in the store (for testing)"),
+        ("size" = u64, Query, description = "size of the store (for testing)"),
+    )
+)]
+async fn get_waiting_page_accept_language(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    cookies: Cookies,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<(HeaderMap, Html<String>)> {
+    let config = &state.config;
+    let locale = header_locale(&headers, &config.locales, &config.default_locale);
+    waiting_page_response(state, &cookies, &params, locale).await
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/waiting_page/{locale}",
     tag = "queue",
     summary = "Set Waiting Page",
     description = "Set the waiting page with new HTML content",
@@ -523,9 +563,18 @@ async fn get_waiting_page(
     responses(
         (status = 200, description = "OK"),
         (status = 400, description = "Bad Request"),
+    ),
+    params(
+        ("locale" = String, Path, description = "locale to use when setting the waiting page")
     )
 )]
-async fn set_waiting_page(State(state): State<AppState>, waiting_page: String) -> Result<()> {
+async fn set_waiting_page(
+    State(state): State<AppState>,
+    Path(locale): Path<String>,
+    waiting_page: String,
+) -> Result<()> {
+    let locale = locale.to_lowercase();
+
     let state = state.clone();
     let config = &state.config;
     let queue = &state.queue;
@@ -536,7 +585,7 @@ async fn set_waiting_page(State(state): State<AppState>, waiting_page: String) -
     }
 
     queue
-        .set_waiting_page(&config.queue_prefix, &waiting_page)
+        .set_waiting_page(&config.queue_prefix, &waiting_page, &locale)
         .await?;
 
     Ok(())
@@ -583,15 +632,15 @@ async fn add_queue_id(State(state): State<AppState>) -> Result<(StatusCode, Json
 )]
 async fn get_queue_id(
     State(state): State<AppState>,
-    Path(user_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<Json<QueuePosition>> {
     let state = state.clone();
     let config = &state.config;
     let queue = &state.queue;
 
-    let uuid = match Uuid::try_from(user_id.clone()) {
+    let uuid = match Uuid::try_from(id.clone()) {
         Ok(uuid) => uuid,
-        Err(e) => return Err(Error::QueueIdInvalid(user_id, e.into())),
+        Err(e) => return Err(Error::QueueIdInvalid(id, e.into())),
     };
 
     let position = queue
@@ -616,15 +665,15 @@ async fn get_queue_id(
 )]
 async fn delete_queue_id(
     State(state): State<AppState>,
-    Path(user_id): Path<String>,
+    Path(id): Path<String>,
 ) -> Result<StatusCode> {
     let state = state.clone();
     let config = &state.config;
     let queue = &state.queue;
 
-    let uuid = match Uuid::try_from(user_id.clone()) {
+    let uuid = match Uuid::try_from(id.clone()) {
         Ok(uuid) => uuid,
-        Err(e) => return Err(Error::QueueIdInvalid(user_id, e.into())),
+        Err(e) => return Err(Error::QueueIdInvalid(id, e.into())),
     };
 
     queue.id_remove(&config.queue_prefix, uuid, None).await?;

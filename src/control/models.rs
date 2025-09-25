@@ -94,6 +94,8 @@ impl QueuePosition {
 )]
 pub struct Config {
     pub name: String,
+    pub default_locale: String,
+    pub locales: Vec<String>,
     pub redis_uri: String,
     pub config_upstream: Vec<Upstream>,
     pub id_cookie_name: String,
@@ -131,6 +133,8 @@ impl From<&config::Config> for Config {
     fn from(config: &config::Config) -> Self {
         Self {
             name: config.app_name.clone(),
+            default_locale: config.default_locale.clone(),
+            locales: config.locales.iter().cloned().collect(),
             redis_uri: config.redis_uri.clone(),
             config_upstream: config.initial_upstream.iter().map(Upstream::from).collect(),
             id_cookie_name: config.id_cookie_name.clone(),

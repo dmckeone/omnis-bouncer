@@ -59,6 +59,7 @@ pub async fn run(
             &config.queue_prefix,
             config.queue_enabled,
             config.store_capacity,
+            &config.locales,
         )
         .await
     {

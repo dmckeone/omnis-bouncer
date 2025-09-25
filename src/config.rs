@@ -3,6 +3,7 @@ use core::result::Result;
 use resolve_path::PathResolveExt;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fmt::Display,
     fs::File,
     io::{self, Read},
@@ -19,6 +20,8 @@ use crate::upstream::Upstream;
 #[derive(Debug)]
 pub struct Config {
     pub app_name: String,
+    pub default_locale: String,
+    pub locales: HashSet<String>,
     pub cookie_secret_key: axum_extra::extract::cookie::Key,
     pub redis_uri: String,
     pub initial_upstream: Vec<Upstream>,
@@ -134,6 +137,8 @@ impl Display for ConfigFileError {
 #[derive(Debug, Deserialize)]
 pub struct ConfigFile {
     pub name: Option<String>,
+    pub default_locale: Option<String>,
+    pub locales: Option<Vec<String>>,
     pub cookie_secret_key: Option<String>,
     pub redis_uri: Option<String>,
     pub initial_upstream: Option<Vec<ConfigFileUpstream>>,
@@ -210,6 +215,14 @@ fn merge_config(config: Config, config_file: ConfigFile) -> Result<Config, Confi
 
     Ok(Config {
         app_name: config_file.name.unwrap_or(config.app_name),
+        default_locale: config_file.default_locale.unwrap_or(config.default_locale),
+        locales: match config_file.locales {
+            Some(l) => l
+                .into_iter()
+                .map(|s| s.to_lowercase())
+                .collect::<HashSet<String>>(),
+            None => config.locales,
+        },
         cookie_secret_key: match config_file.cookie_secret_key {
             Some(key) => match decode_master_key(key) {
                 Ok(key) => key,
