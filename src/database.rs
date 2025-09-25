@@ -99,28 +99,6 @@ pub mod test {
     use std::env;
     use tracing::warn;
 
-    pub fn create_test_client() -> Option<Client> {
-        let uri = match env::var("TEST_REDIS_URI") {
-            Ok(u) => u,
-            Err(e) => {
-                warn!("TEST_REDIS_URI error: {:?}", e);
-                return None;
-            }
-        };
-
-        let uri = uri.trim();
-
-        let client = match create_redis_client(uri.trim()) {
-            Ok(p) => p,
-            Err(e) => {
-                warn!("Redis server not available: {:?}", e);
-                return None;
-            }
-        };
-
-        Some(client)
-    }
-
     pub fn create_test_pool() -> Option<Pool> {
         let uri = match env::var("TEST_REDIS_URI") {
             Ok(u) => u,

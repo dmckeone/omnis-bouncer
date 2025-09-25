@@ -383,54 +383,6 @@ impl QueueControl {
         Ok(())
     }
 
-    /// Current size of the queue
-    pub async fn queue_enabled(&self, prefix: impl Into<String>) -> Result<bool> {
-        let prefix = prefix.into();
-
-        let mut conn = self.conn().await?;
-        let enabled = conn.get(queue_enabled_key(&prefix)).await?;
-
-        let default = false;
-        match enabled {
-            Some(e) => match QueueEnabled::try_from(e) {
-                Ok(qe) => Ok(qe.into()),
-                Err(_) => Ok(default),
-            },
-            None => Ok(default),
-        }
-    }
-
-    /// Current size of the queue
-    pub async fn queue_size(&self, prefix: impl Into<String>) -> Result<usize> {
-        let prefix = prefix.into();
-
-        let mut conn = self.conn().await?;
-        let result = conn.llen(queue_ids_key(&prefix)).await?;
-
-        Ok(result)
-    }
-
-    /// Current capacity of the store
-    pub async fn store_capacity(&self, prefix: impl Into<String>) -> Result<StoreCapacity> {
-        let prefix = prefix.into();
-
-        let mut conn = self.conn().await?;
-        let result = conn.get(store_capacity_key(&prefix)).await?;
-
-        let capacity = StoreCapacity::try_from(result)?;
-        Ok(capacity)
-    }
-
-    /// Current size of the store
-    pub async fn store_size(&self, prefix: impl Into<String>) -> Result<usize> {
-        let prefix = prefix.into();
-
-        let mut conn = self.conn().await?;
-        let result = conn.scard(store_ids_key(&prefix)).await?;
-
-        Ok(result)
-    }
-
     pub async fn waiting_page(&self, prefix: impl Into<String>) -> Result<Option<String>> {
         let prefix = prefix.into();
 
@@ -639,6 +591,57 @@ mod test {
     static QUARANTINE: Duration = Duration::from_secs(45);
     static VALIDATED: Duration = Duration::from_secs(600);
     static EMIT_THROTTLE: Duration = Duration::from_secs(100);
+
+    /// Current size of the queue
+    pub async fn queue_enabled(queue: &QueueControl, prefix: impl Into<String>) -> Result<bool> {
+        let prefix = prefix.into();
+
+        let mut conn = queue.conn().await?;
+        let enabled = conn.get(queue_enabled_key(&prefix)).await?;
+
+        let default = false;
+        match enabled {
+            Some(e) => match QueueEnabled::try_from(e) {
+                Ok(qe) => Ok(qe.into()),
+                Err(_) => Ok(default),
+            },
+            None => Ok(default),
+        }
+    }
+
+    /// Current size of the queue
+    pub async fn queue_size(queue: &QueueControl, prefix: impl Into<String>) -> Result<usize> {
+        let prefix = prefix.into();
+
+        let mut conn = queue.conn().await?;
+        let result = conn.llen(queue_ids_key(&prefix)).await?;
+
+        Ok(result)
+    }
+
+    /// Current capacity of the store
+    pub async fn store_capacity(
+        queue: &QueueControl,
+        prefix: impl Into<String>,
+    ) -> Result<StoreCapacity> {
+        let prefix = prefix.into();
+
+        let mut conn = queue.conn().await?;
+        let result = conn.get(store_capacity_key(&prefix)).await?;
+
+        let capacity = StoreCapacity::try_from(result)?;
+        Ok(capacity)
+    }
+
+    /// Current size of the store
+    pub async fn store_size(queue: &QueueControl, prefix: impl Into<String>) -> Result<usize> {
+        let prefix = prefix.into();
+
+        let mut conn = queue.conn().await?;
+        let result = conn.scard(store_ids_key(&prefix)).await?;
+
+        Ok(result)
+    }
 
     fn test_queue() -> QueueControl {
         let pool = create_test_pool().expect("Failed to create test pool");
@@ -959,8 +962,7 @@ mod test {
             .await
             .expect(format!("Failed to set {}", key).as_ref());
 
-        let actual = queue
-            .queue_enabled(prefix)
+        let actual = queue_enabled(&queue, prefix)
             .await
             .expect("Failed to call queue_enabled");
 
@@ -970,8 +972,7 @@ mod test {
             .await
             .expect(format!("Failed to set {}", key).as_ref());
 
-        let actual = queue
-            .queue_enabled(prefix)
+        let actual = queue_enabled(&queue, prefix)
             .await
             .expect("Failed to call queue_enabled");
 
@@ -998,8 +999,7 @@ mod test {
             .await
             .expect(format!("Failed to push ids: {:?}", ids).as_ref());
 
-        let actual = queue
-            .queue_size(prefix)
+        let actual = queue_size(&queue, prefix)
             .await
             .expect("Failed to call queue_size");
 
@@ -1020,8 +1020,7 @@ mod test {
             .await
             .expect(format!("Failed to set {}", key).as_ref());
 
-        let actual = queue
-            .store_capacity(prefix)
+        let actual = store_capacity(&queue, prefix)
             .await
             .expect("Failed to call store_capacity");
 
@@ -1043,8 +1042,7 @@ mod test {
             .await
             .expect(format!("Failed to set {}", key).as_ref());
 
-        let actual = queue
-            .store_capacity(prefix)
+        let actual = store_capacity(&queue, prefix)
             .await
             .expect("Failed to call store_capacity");
 
@@ -1073,8 +1071,7 @@ mod test {
             .await
             .expect(format!("Failed to push ids: {:?}", ids).as_ref());
 
-        let actual = queue
-            .store_size(prefix)
+        let actual = store_size(&queue, prefix)
             .await
             .expect("Failed to call store_size");
 
@@ -1399,14 +1396,12 @@ mod test {
         assert_eq!(rotation.store_expired, store_capacity);
         assert_eq!(rotation.promoted, store_capacity);
 
-        let queue_size = queue
-            .queue_size(prefix)
+        let queue_size = queue_size(&queue, prefix)
             .await
             .expect("Failed to get queue size");
         assert_eq!(queue_size, followup_queue_count - store_capacity);
 
-        let store_size = queue
-            .store_size(prefix)
+        let store_size = store_size(&queue, prefix)
             .await
             .expect("Failed to get store size");
         assert_eq!(store_size, store_capacity);
