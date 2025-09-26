@@ -158,7 +158,7 @@ impl UpstreamServer {
     async fn expire_sticky(&self, now: Instant, expiry: Duration) -> HashSet<Uuid> {
         let mut guard = self.sticky_sessions.write().await;
         let extracted: HashMap<Uuid, Instant> = guard
-            .extract_if(|_, i| now.duration_since(*i) < expiry)
+            .extract_if(|_, i| now.duration_since(*i) > expiry)
             .collect();
 
         extracted.keys().copied().collect()
