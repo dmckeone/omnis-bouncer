@@ -126,6 +126,20 @@ impl UpstreamServer {
         guard.len()
     }
 
+    /// Update a sticky session ID with a new usage date
+    ///
+    /// # Locking
+    /// This function acquires an internal write lock to ensure thread-safe
+    /// modification of the sticky sessions.
+    async fn update_id(&self, id: &Uuid) {
+        let mut guard = self.sticky_sessions.write().await;
+        // Double check on an update to make sure we still have the key after acquiring the write
+        // lock, otherwise this can be ignored, as it's already been cleaned up.
+        if guard.contains_key(id) {
+            guard.insert(*id, Instant::now());
+        }
+    }
+
     /// Attempt to stick an ID to this upstream server, `UpstreamStickyError:Full` if full
     ///
     /// # Locking
@@ -413,6 +427,9 @@ impl Pool {
     ) -> Option<(OwnedSemaphorePermit, String)> {
         for upstream in self.pool.iter() {
             if upstream.contains_id(id).await {
+                // Mark sticky session with new date
+                upstream.update_id(id).await;
+                // Get regular connection semaphore
                 return Self::existing_sticky_uri(upstream);
             }
         }
