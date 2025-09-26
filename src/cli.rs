@@ -458,7 +458,7 @@ pub struct RunArgs {
 fn build_upstream(args: &RunArgs) -> Vec<Upstream> {
     args.upstream
         .iter()
-        .map(|u| Upstream::new(u, args.upstream_connections, args.upstream_connections))
+        .map(|u| Upstream::new(u, args.upstream_connections, args.upstream_sessions))
         .collect()
 }
 
