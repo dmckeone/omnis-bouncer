@@ -18,8 +18,8 @@ export const useUpstreams = defineStore('upstreams', () => {
     .get()
     .json()
 
-  // Refetch every 10 seconds
-  setTimeout(() => execute(), 10 * 1000)
+  // WORKAROUND: Refetch every 10 seconds until signals are setup for upstreams
+  setInterval(execute, 10 * 1000)
 
   return { upstreams: data, error }
 })
