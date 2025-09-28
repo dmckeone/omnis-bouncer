@@ -1,8 +1,8 @@
+import { useFetch } from '@vueuse/core'
 import { defineStore } from 'pinia'
+import type { ShallowRef } from 'vue'
 
 import { API_URI } from '@/constants'
-import { useFetch } from '@vueuse/core'
-import type { ShallowRef } from 'vue'
 import type { Upstream } from '@/models.ts'
 
 export const useUpstreams = defineStore('upstreams', () => {

@@ -1,0 +1,13 @@
+.component-container {
+  height: 100%;
+  width: 100%;
+  background: conic-gradient(
+    #ffffff 90deg,
+    #ededed 90deg 180deg,
+    #ffffff 180deg 270deg,
+    #ededed 270deg
+  );
+  background-repeat: repeat;
+  background-size: 60px 60px;
+  background-position: top left;
+}

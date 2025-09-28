@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+
+import QueueStatus from '@/components/QueueStatus.vue'
 import TopNav from '@/components/TopNav.vue'
 import UpstreamTable from '@/components/UpstreamTable.vue'
-import QueueStatus from '@/components/QueueStatus.vue'
 import { useQueueStatus } from '@/stores/queue.ts'
 import { useUpstreams } from '@/stores/upstreams.ts'
 
@@ -16,7 +17,7 @@ const { upstreams } = storeToRefs(upstreamsStore)
 <template>
   <TopNav :title="config != null ? config.name : ''">
     <QueueStatus :status="status" />
-    <hr class="mx-5 border-accent" />
+    <hr class="mx-5 border-1 border-accent" />
     <UpstreamTable :upstreams="upstreams" />
   </TopNav>
 </template>

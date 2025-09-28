@@ -7,19 +7,17 @@ const props = defineProps<{
 </script>
 
 <template>
-  <div
-    class="overflow-x-auto rounded-box border border-base-content/5 bg-base-100 flex-auto m-5 max-w-3xl"
-  >
+  <div class="overflow-x-auto rounded-box bg-base-100 flex-auto m-5 max-w-3xl drop-shadow-md">
     <table class="table table-zebra">
       <!-- head -->
-      <thead class="text-lg">
-        <tr>
-          <th>Upstream Host</th>
-          <th>Connections</th>
-          <th>Sticky Sessions</th>
+      <thead class="text-mg">
+        <tr class="bg-info">
+          <th class="text-info-content">Upstream Host</th>
+          <th class="text-info-content">Connections</th>
+          <th class="text-info-content">Sticky Sessions</th>
         </tr>
       </thead>
-      <tbody class="text-md" v-if="props.upstreams != null">
+      <tbody class="text-sm" v-if="props.upstreams != null">
         <tr v-for="upstream in props.upstreams" :key="upstream.uri">
           <th>{{ upstream.uri }}</th>
           <td>{{ upstream.connections }}</td>

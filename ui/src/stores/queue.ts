@@ -1,9 +1,9 @@
-import { defineStore } from 'pinia'
 import { useFetch, useTitle } from '@vueuse/core'
+import { defineStore } from 'pinia'
+import { type ShallowRef, watchEffect } from 'vue'
 
 import { API_URI } from '@/constants'
 import { type Config, INTERESTING_EVENTS_RE, type QueueStatus } from '@/models.ts'
-import { type ShallowRef, watchEffect } from 'vue'
 
 export const useQueueStatus = defineStore('queue', () => {
   const title = useTitle('')

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import type { QueueStatus } from '@/models.ts'
 import { computed } from 'vue'
-import { POWER_ICON, STORE_ICON, SWITCH_ICON, WAITING_ROOM_ICON } from '@/icons.ts'
-import StatPanel from '@/components/StatPanel.vue'
+
 import StatGroup from '@/components/StatGroup.vue'
+import StatPanel from '@/components/StatPanel.vue'
+import { POWER_ICON, STORE_ICON, SWITCH_ICON, WAITING_ROOM_ICON } from '@/icons.ts'
+import type { QueueStatus } from '@/models.ts'
 
 const props = defineProps<{
   status: QueueStatus | null
@@ -19,7 +20,7 @@ const enabled_description = computed(() => {
 </script>
 
 <template>
-  <StatGroup class="flex-auto m-5 max-w-3xl">
+  <StatGroup class="flex-auto rounded-box m-5 max-w-3xl bg-base-100 drop-shadow-md">
     <StatPanel
       v-if="props.status != null"
       title="Queue Enabled"

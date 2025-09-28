@@ -1,10 +1,9 @@
-import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-
-import './shared'
+import { createApp } from 'vue'
 
 import App from './App.vue'
 import router from './router'
+import './shared'
 
 const app = createApp(App)
 

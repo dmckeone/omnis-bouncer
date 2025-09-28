@@ -1,7 +1,8 @@
-import type { Config, QueueStatus, Upstream } from '@/models.ts'
+import type { Store, StoreDefinition } from 'pinia'
 import type { Mock } from 'vitest'
 import type { UnwrapRef } from 'vue'
-import type { Store, StoreDefinition } from 'pinia'
+
+import type { Config, QueueStatus, Upstream } from '@/models.ts'
 
 // Helper function for mocking stores
 export function mockedStore<TStoreDef extends () => unknown>(

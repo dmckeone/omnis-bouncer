@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { type Ref, ref } from 'vue'
+
 import QueueStatus from '@/components/QueueStatus.vue'
-import type { QueueStatus as QueueStatusType } from '@/models'
+import TestContainer from '@/components/TestContainer.vue'
 import { mockStatus } from '@/mocks.ts'
+import type { QueueStatus as QueueStatusType } from '@/models'
 
 const status: Ref<QueueStatusType> = ref(mockStatus)
 </script>
 
 <template>
   <Story auto-props-disabled>
-    <QueueStatus :status="status" />
+    <TestContainer>
+      <QueueStatus :status="status" />
+    </TestContainer>
 
     <template #controls>
       <HstJson v-model="status" title="Status" />
