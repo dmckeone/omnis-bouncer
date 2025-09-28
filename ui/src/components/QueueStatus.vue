@@ -6,7 +6,7 @@ import StatPanel from '@/components/StatPanel.vue'
 import StatGroup from '@/components/StatGroup.vue'
 
 const props = defineProps<{
-  status?: QueueStatus | null
+  status: QueueStatus | null
 }>()
 
 const enabled_description = computed(() => {

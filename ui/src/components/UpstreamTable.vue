@@ -2,7 +2,7 @@
 import type { Upstream } from '@/models.ts'
 
 const props = defineProps<{
-  upstreams?: Upstream[] | null
+  upstreams: Upstream[] | null
 }>()
 </script>
 
