@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { useUpstreams } from '@/stores/upstreams.ts'
-import { storeToRefs } from 'pinia'
+import type { Upstream } from '@/models.ts'
 
-const upstreamsStore = useUpstreams()
-const { upstreams } = storeToRefs(upstreamsStore)
+const props = defineProps<{
+  upstreams?: Upstream[] | null
+}>()
 </script>
 
 <template>
@@ -19,9 +19,8 @@ const { upstreams } = storeToRefs(upstreamsStore)
           <th>Sticky Sessions</th>
         </tr>
       </thead>
-      <tbody class="text-md">
-        <!-- row 1 -->
-        <tr v-for="upstream in upstreams" :key="upstream.uri">
+      <tbody class="text-md" v-if="props.upstreams != null">
+        <tr v-for="upstream in props.upstreams" :key="upstream.uri">
           <th>{{ upstream.uri }}</th>
           <td>{{ upstream.connections }}</td>
           <td>{{ upstream.sticky_sessions }}</td>

@@ -11,7 +11,7 @@ export const useUpstreams = defineStore('upstreams', () => {
     error,
     execute,
   }: {
-    data: ShallowRef<[Upstream] | null>
+    data: ShallowRef<Upstream[] | null>
     error: ShallowRef<any>
     execute: (throwOnFailed?: boolean) => Promise<any>
   } = useFetch(API_URI + 'api/upstreams')

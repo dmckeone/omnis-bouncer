@@ -1,7 +1,9 @@
 export interface Config {
   name: string
+  default_locale: string
+  locales: string[]
   redis_uri: string
-  config_upstream: [Upstream]
+  config_upstream: Upstream[]
   id_cookie_name: string
   position_cookie_name: string
   queue_size_cookie_name: string

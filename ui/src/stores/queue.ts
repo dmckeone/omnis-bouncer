@@ -21,10 +21,9 @@ export const useQueueStatus = defineStore('queue', () => {
     .json()
 
   watchEffect(() => {
-    if (config.value != null) {
+    if (config.value != undefined) {
       title.value = config.value.name
     }
-    console.log(config.value)
   })
 
   const {
