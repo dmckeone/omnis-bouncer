@@ -15,7 +15,7 @@ export const useQueueStatus = defineStore('queue', () => {
   }: {
     data: ShallowRef<Config | null>
     error: ShallowRef<any>
-    execute: (throwOnFailed?: boolean) => Promise<any>
+    execute: (throwOnFailed?: boolean) => void
   } = useFetch(API_URI + 'api/config')
     .get()
     .json()
@@ -33,7 +33,7 @@ export const useQueueStatus = defineStore('queue', () => {
   }: {
     data: ShallowRef<QueueStatus | null>
     error: ShallowRef<any>
-    execute: (throwOnFailed?: boolean) => Promise<any>
+    execute: (throwOnFailed?: boolean) => void
   } = useFetch(API_URI + 'api/status')
     .get()
     .json()
