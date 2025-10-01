@@ -82,7 +82,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build Release
+      - name: Build
         run: cargo build --verbose
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
@@ -124,7 +124,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build Release
+      - name: Build
         run: cargo build --profile test --verbose
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
