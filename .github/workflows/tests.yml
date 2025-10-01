@@ -188,7 +188,7 @@ jobs:
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
           Move-Item -Path "target/${{ matrix.target }}/release/omnis-bouncer.exe" -Destination "omnis-bouncer.exe"
-          7z a "omnis-bouncer.zip" "omnis-bouncer.exe"
+          7z a "omnis-bouncer-${{ matrix.build }}.zip" "omnis-bouncer.exe"
 
       - uses: actions/upload-artifact@v4
         if: ${{ matrix.os == 'windows-latest' }}
@@ -201,7 +201,7 @@ jobs:
         if: ${{ matrix.os != 'windows-latest' }}
         run: |
           mv  "target/${{ matrix.target }}/release/omnis-bouncer" "omnis-bouncer"
-          tar -czf "omnis-bouncer.tar.gz" "omnis-bouncer"
+          tar -czf "omnis-bouncer-${{ matrix.build }}.tar.gz" "omnis-bouncer"
 
       - uses: actions/upload-artifact@v4
         if: ${{ matrix.os != 'windows-latest' }}
