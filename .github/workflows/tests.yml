@@ -92,10 +92,9 @@ jobs:
     needs: ui
     strategy:
       matrix:
-        os: [ ubuntu-latest, macos-latest, windows-latest ]
         redis: [ redis:8, valkey:8 ]
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     env:
       CARGO_TERM_COLOR: always
@@ -117,8 +116,6 @@ jobs:
           path: ui/dist
 
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
 
@@ -126,3 +123,32 @@ jobs:
         run: cargo test --profile test --verbose
         env:
           TEST_REDIS_URI: redis://127.0.0.1:6379/0
+
+
+  server-build:
+    needs: ui
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    runs-on: ${{ matrix.os }}
+
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: ui-dist
+          path: ui/dist
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run Tests
+        run: cargo build --release --verbose
