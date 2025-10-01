@@ -10,14 +10,8 @@ macro_rules! log {
 
 fn main() {
     let build_ui = match var("OMNIS_BOUNCER_BUILD_UI") {
-        Ok(b) => {
-            if b == "0" {
-                false
-            } else {
-                true
-            }
-        }
-        Err(e) => true,
+        Ok(value) => !["0", "false", "f"].contains(&value.to_lowercase().as_str()),
+        Err(_) => true,
     };
 
     let profile = match var("PROFILE") {
