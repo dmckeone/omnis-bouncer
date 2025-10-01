@@ -69,9 +69,9 @@ fn run_server(args: &RunArgs) {
     };
 
     // Install crypto provider guard (must be early in app startup)
-    rustls::crypto::aws_lc_rs::default_provider()
+    rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("Failed to install aws_lc_rs for crypto provider");
+        .expect("Failed to install ring for crypto provider");
 
     // Create a shutdown handle for graceful shutdown  (must be early in app startup)
     let shutdown_handle = Handle::new();
