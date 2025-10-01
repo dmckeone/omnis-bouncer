@@ -30,23 +30,29 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
+
           node-version: 24
           cache: 'pnpm'
 
       - name: Install dependencies
         run: pnpm install
+        working-directory: ./ui
 
       - name: UI Lint
         run: pnpm run lint-ci
+        working-directory: ./ui
 
       - name: UI Format
         run: pnpm run format-ci
+        working-directory: ./ui
 
       - name: UI Test
         run: pnpm run test
+        working-directory: ./ui
 
       - name: UI Build
         run: pnpm run build
+        working-directory: ./ui
 
       - name: Install Rust Toolchain
         run: |
