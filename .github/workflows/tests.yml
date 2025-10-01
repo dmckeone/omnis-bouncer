@@ -30,8 +30,10 @@ jobs:
           restore-keys: |
             test-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
             test-${{ runner.os }}-
+      - name: Create fake UI build artifacts for testing
+        run: mkdir ui/dist && mkdir ui/dist/assets && touch ui/dist/assets/favicon.ico && touch ui/dist/assets/index.html
       - name: Build
-        run: mkdir ui/dist && mkdir ui/dist/assets && touch ui/dist/assets/favicon.ico && cargo build --profile test --verbose
+        run: cargo build --profile test --verbose
       - name: Setup Redis
         uses: supercharge/redis-github-action@1.8.0
         with:
