@@ -1,4 +1,4 @@
-use axum_server::{tls_rustls::RustlsConfig, Handle};
+use axum_server::{Handle, tls_rustls::RustlsConfig};
 use reqwest::Client;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{join, sync::Notify};

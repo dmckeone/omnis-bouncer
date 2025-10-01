@@ -1,6 +1,6 @@
 use axum_extra::extract::cookie::{Cookie, Expiration, SameSite};
 use std::time::Duration;
-use tower_cookies::{cookie::time::OffsetDateTime, Cookies, PrivateCookies};
+use tower_cookies::{Cookies, PrivateCookies, cookie::time::OffsetDateTime};
 
 pub enum CookieStatus {
     Added,

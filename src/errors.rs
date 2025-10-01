@@ -96,7 +96,7 @@ where
 mod tests {
     use super::*;
     use axum::routing::get;
-    use axum::{body::Body, http::Request, http::StatusCode, Router};
+    use axum::{Router, body::Body, http::Request, http::StatusCode};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 

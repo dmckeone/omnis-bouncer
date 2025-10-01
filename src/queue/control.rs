@@ -1,29 +1,29 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{Connection, Pool as RedisPool};
-use futures_util::{pin_mut, Stream};
+use futures_util::{Stream, pin_mut};
 use is_html::is_html;
 use lazy_static::lazy_static;
-use minify_html_onepass::{copy as minify, Cfg};
-use redis::{self, pipe, AsyncTypedCommands};
+use minify_html_onepass::{Cfg, copy as minify};
+use redis::{self, AsyncTypedCommands, pipe};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{broadcast, broadcast::Receiver, Notify, RwLock};
-use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
+use tokio::sync::{Notify, RwLock, broadcast, broadcast::Receiver};
+use tokio_stream::{StreamExt, wrappers::errors::BroadcastStreamRecvError};
 use tracing::error;
 use uuid::Uuid;
 
 use crate::constants::{DEBOUNCE_INTERVAL, DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
-use crate::database::{current_time, get_connection, RedisSubscriber};
+use crate::database::{RedisSubscriber, current_time, get_connection};
 use crate::errors::Result;
 use crate::queue::models::{
     QueueEnabled, QueueEvent, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
 use crate::queue::scripts::{
-    queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
-    waiting_page_key, Scripts,
+    Scripts, queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key,
+    store_ids_key, waiting_page_key,
 };
 use crate::stream::debounce;
 

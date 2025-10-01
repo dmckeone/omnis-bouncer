@@ -1,5 +1,5 @@
 use async_stream::stream;
-use futures_util::{pin_mut, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, pin_mut};
 use std::{
     collections::HashSet,
     fmt::Debug,

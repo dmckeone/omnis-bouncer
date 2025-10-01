@@ -1,5 +1,5 @@
 use axum_extra::extract::cookie::Cookie;
-use http::{header::CONTENT_TYPE, HeaderMap, HeaderName};
+use http::{HeaderMap, HeaderName, header::CONTENT_TYPE};
 use tower_cookies::Cookies;
 use tracing::error;
 use uuid::Uuid;

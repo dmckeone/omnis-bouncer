@@ -2,7 +2,7 @@ use clap::{ArgAction, Args, Parser, Subcommand};
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::config::{build_tls_pair, Config};
+use crate::config::{Config, build_tls_pair};
 use crate::errors::{Error, Result};
 use crate::queue::StoreCapacity;
 use crate::secrets::decode_master_key;

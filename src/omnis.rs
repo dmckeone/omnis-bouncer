@@ -1,26 +1,26 @@
 use axum::{
-    error_handling::HandleErrorLayer, extract::{ConnectInfo, OriginalUri, Request, State},
+    BoxError, Router,
+    error_handling::HandleErrorLayer,
+    extract::{ConnectInfo, OriginalUri, Request, State},
     response::IntoResponse,
     routing::{any, get},
-    BoxError,
-    Router,
 };
 use axum_response_cache::CacheLayer;
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use http::{
+    HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
     header::{
         ACCEPT, ACCEPT_ENCODING, CONNECTION, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE,
         PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING, UPGRADE,
         UPGRADE_INSECURE_REQUESTS,
-    }, uri::{PathAndQuery, Scheme}, HeaderMap, HeaderName, HeaderValue, Method,
-    StatusCode,
-    Uri,
+    },
+    uri::{PathAndQuery, Scheme},
 };
 use lazy_static::lazy_static;
 use regex::{Regex, RegexBuilder};
 use std::time::Instant;
 use std::{collections::HashSet, net::SocketAddr, time::Duration, time::SystemTime};
-use tower::{buffer::BufferLayer, limit::RateLimitLayer, load_shed::LoadShedLayer, ServiceBuilder};
+use tower::{ServiceBuilder, buffer::BufferLayer, limit::RateLimitLayer, load_shed::LoadShedLayer};
 use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
 use tower_http::{compression::CompressionLayer, decompression::RequestDecompressionLayer};
 use tracing::{error, info};
@@ -31,7 +31,7 @@ use crate::errors::Result;
 use crate::locales::header_locale;
 use crate::state::AppState;
 use crate::upstream::{ConnectionPermit, UpstreamPool};
-use crate::waiting_room::{check_waiting_page, extract_queue_id, QueueId, WaitingRoom};
+use crate::waiting_room::{QueueId, WaitingRoom, check_waiting_page, extract_queue_id};
 
 lazy_static! {
     static ref UPSTREAM_IGNORE: HashSet<HeaderName> = {

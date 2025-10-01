@@ -22,11 +22,11 @@ mod waiting_room;
 use axum_server::Handle;
 use std::{path::Path, sync::Arc};
 use tokio::sync::Notify;
-use tracing::{error, info, Level};
+use tracing::{Level, error, info};
 
 use crate::certs::{write_pem, write_pfx};
-use crate::cli::{parse_cli, Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs};
-use crate::config::{read_config_file, Config};
+use crate::cli::{Commands, ExportAuthorityArgs, ExportAuthorityCommands, RunArgs, parse_cli};
+use crate::config::{Config, read_config_file};
 use crate::secrets::encode_master_key;
 
 /// Main entry point for app

@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
-use deadpool_redis::{redis::cmd, Config, Connection, Pool, Runtime};
+use deadpool_redis::{Config, Connection, Pool, Runtime, redis::cmd};
 use futures_util::StreamExt;
 use redis::Client;
 use std::sync::Arc;
 use tokio::select;
 use tokio::sync::broadcast::{Receiver, Sender};
-use tokio::sync::{broadcast, Notify};
+use tokio::sync::{Notify, broadcast};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::error;
 

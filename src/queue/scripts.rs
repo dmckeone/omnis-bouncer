@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use deadpool_redis::{redis, Connection};
-use redis::{pipe, Script};
+use deadpool_redis::{Connection, redis};
+use redis::{Script, pipe};
 use std::time::Duration;
 use uuid::Uuid;
 

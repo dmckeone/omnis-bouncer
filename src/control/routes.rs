@@ -1,19 +1,19 @@
 use axum::extract::Query;
 use axum::response::Html;
 use axum::{
+    Json, Router,
     extract::{
-        ws::{self, WebSocketUpgrade}, Path,
-        State,
-    }, response::{
-        sse::{Event as SSEvent, KeepAlive, Sse},
+        Path, State,
+        ws::{self, WebSocketUpgrade},
+    },
+    response::{
         Response,
+        sse::{Event as SSEvent, KeepAlive, Sse},
     },
     routing::any,
-    Json,
-    Router,
 };
 use futures_util::stream::Stream;
-use http::{header::CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -23,7 +23,7 @@ use tower_http::{compression::CompressionLayer, decompression::RequestDecompress
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::{debug, error};
 use utoipa::{
-    openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder, openapi::Tag, OpenApi,
+    OpenApi, openapi::Tag, openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder,
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
