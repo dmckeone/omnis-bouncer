@@ -18,13 +18,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      - name: Build
+        run: mkdir ui/dist && mkdir ui/dist/assets && cargo build --profile test --verbose
       - name: Setup Redis
         uses: supercharge/redis-github-action@1.8.0
         with:
           redis-version: ${{ matrix.redis-version }}
           redis-port: 6379
-      - name: Build
-        run: cargo build --profile test --verbose
       - name: Run Tests
         run: cargo test --profile test --verbose
         env:
