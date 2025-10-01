@@ -178,16 +178,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: build
-          args: --verbose --release --target ${{ matrix.target }}
+      - name: Build Release
+        run: cargo build --release --verbose --target ${{ matrix.target }}
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
 
-      - name: Build archive
+      - name: Archive
         shell: powershell
         if: ${{ matrix.os == 'windows-latest' }}
         run: |
@@ -200,7 +196,7 @@ jobs:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer.zip
 
-      - name: Build archive
+      - name: Archive
         shell: bash
         if: ${{ matrix.os != 'windows-latest' }}
         run: |
