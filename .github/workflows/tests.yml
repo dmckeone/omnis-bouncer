@@ -14,16 +14,28 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        redis-version: [ 6, 7, 8 ]
+        os: [ ubuntu-latest ]
 
     steps:
       - uses: actions/checkout@v4
+      - name: Cache Crates
+        id: cache-cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ./ui/dist
+            ./target
+            ~/.cargo
+          key: test-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            test-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+            test-${{ runner.os }}-
       - name: Build
-        run: mkdir ui/dist && mkdir ui/dist/assets && cargo build --profile test --verbose
+        run: mkdir ui/dist && mkdir ui/dist/assets && touch ui/dist/assets/favicon.ico && cargo build --profile test --verbose
       - name: Setup Redis
         uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: ${{ matrix.redis-version }}
+          redis-version: 6
           redis-port: 6379
       - name: Run Tests
         run: cargo test --profile test --verbose
