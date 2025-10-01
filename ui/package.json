@@ -14,7 +14,9 @@
     "build-only": "cross-env VITE_API_URI=/ vite build",
     "type-check": "vue-tsc --build",
     "lint": "eslint . --fix",
+    "lint-ci": "eslint .",
     "format": "prettier --write src/",
+    "format-ci": "prettier --check src/",
     "story:dev": "histoire dev",
     "story:build": "histoire build",
     "story:build-ci": "histoire build -c histoire-ci.config.ts"

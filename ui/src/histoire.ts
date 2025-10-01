@@ -5,4 +5,5 @@ import { type Vue3StorySetupApi } from '@histoire/plugin-vue'
 import './histoire.css'
 import './shared'
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function setupApp({ app }: Vue3StorySetupApi) {}
