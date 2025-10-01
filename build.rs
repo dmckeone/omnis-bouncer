@@ -9,6 +9,17 @@ macro_rules! log {
 }
 
 fn main() {
+    let build_ui = match var("OMNIS_BOUNCER_BUILD_UI") {
+        Ok(b) => {
+            if b == "0" {
+                false
+            } else {
+                true
+            }
+        }
+        Err(e) => true,
+    };
+
     let profile = match var("PROFILE") {
         Ok(profile) => profile,
         Err(e) => {
@@ -18,7 +29,7 @@ fn main() {
     };
 
     // Only build UI on release builds
-    if profile != "release" {
+    if !build_ui || profile != "release" {
         return;
     }
 

@@ -82,6 +82,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Build Release
+        run: cargo build --verbose
+        env:
+          OMNIS_BOUNCER_BUILD_UI: 0
+
       - name: Lint
         run: cargo clippy --all -- -D warnings
 
@@ -119,10 +124,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Build Release
+        run: cargo build --profile test --verbose
+        env:
+          OMNIS_BOUNCER_BUILD_UI: 0
+
       - name: Run Tests
         run: cargo test --profile test --verbose
         env:
           TEST_REDIS_URI: redis://127.0.0.1:6379/0
+          OMNIS_BOUNCER_BUILD_UI: 0
 
 
   server-build:
@@ -150,5 +161,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run Tests
+      - name: Build Release
         run: cargo build --release --verbose
+        env:
+          OMNIS_BOUNCER_BUILD_UI: 0
