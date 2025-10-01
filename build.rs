@@ -1,6 +1,5 @@
 use build_deps::rerun_if_changed_paths;
-use std::path::Path;
-use std::process::Command;
+use std::{env::var, path::Path, process::Command};
 
 // Cargo doesn't output normal println!() so use this small macro to print limited output
 macro_rules! log {
@@ -10,6 +9,19 @@ macro_rules! log {
 }
 
 fn main() {
+    let profile = match var("PROFILE") {
+        Ok(profile) => profile,
+        Err(e) => {
+            log!("Unable to find PROFILE environment variable: {}", e);
+            return;
+        }
+    };
+
+    // Only build UI on release builds
+    if profile != "release" {
+        return;
+    }
+
     log!("Building UI: pnpm run build");
 
     let ui_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui");

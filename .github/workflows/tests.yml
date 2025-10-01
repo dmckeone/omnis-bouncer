@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        redis-version: [ 6, 7, 8 ]
+        redis-port: 6379
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Redis
+        uses: supercharge/redis-github-action@1.8.0
+        with:
+          redis-version: ${{ matrix.redis-version }}
+      - name: Build
+        run: cargo build --profile test --verbose
+      - name: Run Tests
+        run: cargo test --profile test --verbose
+        env:
+          TEST_REDIS_URI: redis://127.0.0.1:6379/0
