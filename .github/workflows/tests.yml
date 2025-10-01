@@ -92,7 +92,7 @@ jobs:
     needs: ui
     strategy:
       matrix:
-        redis: [ redis:8, valkey:8 ]
+        redis: [ redis:8, valkey/valkey:8 ]
 
     runs-on: ubuntu-latest
 
