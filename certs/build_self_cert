@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# Alternatives
+#
+# * [mkcert](https://github.com/FiloSottile/mkcert)
+# * [rustls-cert-gen](https://github.com/rustls/rcgen/tree/main/rustls-cert-gen)
+
 # Ensure OpenSSL 3+
 openssl_bin=openssl
 

@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 
 #
-# Add to trust chain
+# Add To Trust Chain
+#
+# Windows (NOTE: Password is configured below)
+#
+# Certificate Stores: https://learn.microsoft.com/en-us/windows-hardware/drivers/install/local-machine-and-current-user-certificate-stores
+#
+#   Import-PfxCertificate –FilePath C:\path\to\self_authoirty\root.pfx cert:\LocalMachine\Root -Password dummypassword
+#
+#    -or-
+#
+#   Import-PfxCertificate –FilePath C:\path\to\self_authoirty\root.pfx cert:\CurrentUser\Root -Password dummypassword
+#
 #
 # OS X (Safari and Chrome):
 #
@@ -14,6 +25,12 @@
 #
 #   WARNING: Also verify that older certificates are removed first.  Expired CA certs can interfere
 #            with newly imported CA certs.
+#
+#
+# Alternatives
+#
+# * [mkcert](https://github.com/FiloSottile/mkcert)
+# * [rustls-cert-gen](https://github.com/rustls/rcgen/tree/main/rustls-cert-gen)
 #
 
 # Ensure OpenSSL 3+
