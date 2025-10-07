@@ -16,37 +16,33 @@ config_file=self_cert.cnf
 
 # Root location
 root_certificate_file=self_authority/root.crt
-root_key_file=self_authority/root.key
-srl_file=self_authority/root.srl
+root_private_key_file=self_authority/root.key
+serial_file=self_authority/root.srl
 
 # Certificate file names
 certificate_file=self_cert/server.crt
-key_file=self_cert/server.key
-csr_file=self_cert/server.csr
+private_key_file=self_cert/server.key
+certificate_signing_request_file=self_cert/server.csr
 dh_file=self_cert/dhparam.pem
 
 # Generate a key
 echo "Generating key request for $domain"
-$openssl_bin genrsa -traditional -aes256 -passout pass:$password -out "$key_file" $key_bits
+$openssl_bin genrsa -traditional -aes256 -passout pass:$password -out "$private_key_file" $key_bits
 
 # Remove passphrase from the key.
 echo "Removing passphrase from key"
-$openssl_bin rsa -in "$key_file" -passin pass:$password -out "$key_file"
+$openssl_bin rsa -in "$private_key_file" -passin pass:$password -out "$private_key_file"
 
 # Create the request
 echo "Creating certificate signing request"
-$openssl_bin req -new -extensions req_server_csr_x509_extensions -key "$key_file" -out "$csr_file" -passin pass:$password -config $config_file
+$openssl_bin req -new -extensions req_server_csr_x509_extensions -key "$private_key_file" -out "$certificate_signing_request_file" -passin pass:$password -config $config_file
 
 # Create the certificate
 echo "Creating certificate"
-$openssl_bin x509 -req -sha256 -extensions req_ext -extfile $config_file -in "$csr_file" -CA "$root_certificate_file" -CAkey "$root_key_file" -CAcreateserial -out "$certificate_file" -days $days
-
-# Generate Diffie-Hellman parameter
-echo "Creating Diffie-Hellman Parameter"
-$openssl_bin dhparam -out "$dh_file" $dh_bits
+$openssl_bin x509 -req -sha256 -extensions req_ext -extfile $config_file -in "$certificate_signing_request_file" -CA "$root_certificate_file" -CAkey "$root_private_key_file" -CAcreateserial -out "$certificate_file" -days $days
 
 echo "Cleanup"
-rm $csr_file
-rm $srl_file
+rm $certificate_signing_request_file
+rm $serial_file
 
 echo Done! 
