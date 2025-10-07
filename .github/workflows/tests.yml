@@ -181,6 +181,7 @@ jobs:
           path: ui/dist
 
       - name: Install and configure dependencies
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
           # dependencies are only needed on ubuntu as that's the only place where
           # we make cross-compilation
