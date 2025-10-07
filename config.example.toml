@@ -2,10 +2,10 @@
 #name = "Omnis Bouncer"
 
 # Default language to use if a language is not found
-#languages = "en"
+#default_locale = "en"
 
 # Languages supported for the waiting room page
-#languages = ["en", "de", "fr"]
+#locales = ["en", "de", "fr"]
 
 # Master key (in base64) for cookie encryption.  Generate with `omnis-bouncer generate-key`
 #cookie_key = "Fkm+v0BDS+XoGNTlfsjLoH97DtqsQL4L2KFB8OkWxk/izMiXgfTE1IoY8MxG7ANYuXCFkpUFstD33Rhq/w03vQ=="
@@ -107,19 +107,19 @@
 
 # Validated period (in secs) to allow a user to complete their session before evicting them
 # from the queue or store.
-#validated_expiry = 600,
+#validated_expiry = 600
 
 # Maximum frequency (in milliseconds) that the same event will be published to Redis from
 # this server
-#publish_throttle = 100,
+#publish_throttle = 100
 
 # Convert headers into arguments for Ultra-Thin requests
-#ultra_thin_inject_headers = true,
+#ultra_thin_inject_headers = true
 
 # Omnis Studio library to use as a fallback for requests that aren't routed directly to
 # /ultra.  Must be used in conjunction with fallback_ultra_thin_class.
-#fallback_ultra_thin_library =
+#fallback_ultra_thin_library = "YourLibrary"
 
 # Omnis Studio remote task class to use as a fallback for requests that aren't routed
 # directly to /ultra.  Must be used in conjunction with fallback_ultra_thin_library.
-#fallback_ultra_thin_class = 
+#fallback_ultra_thin_class = "rtUltra"
