@@ -183,7 +183,7 @@ jobs:
       - name: Install and configure dependencies
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
-          sudo apt-get install -qq crossbuild-essential-arm64
+          sudo apt-get install -qq libssl-dev crossbuild-essential-arm64
 
           # some additional configuration for cross-compilation on linux
           cat >>~/.cargo/config <<EOF
