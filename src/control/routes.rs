@@ -1,19 +1,19 @@
 use axum::extract::Query;
 use axum::response::Html;
 use axum::{
-    Json, Router,
     extract::{
-        Path, State,
-        ws::{self, WebSocketUpgrade},
-    },
-    response::{
-        Response,
+        ws::{self, WebSocketUpgrade}, Path,
+        State,
+    }, response::{
         sse::{Event as SSEvent, KeepAlive, Sse},
+        Response,
     },
     routing::any,
+    Json,
+    Router,
 };
 use futures_util::stream::Stream;
-use http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header::CONTENT_TYPE};
+use http::{header::CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -23,7 +23,7 @@ use tower_http::{compression::CompressionLayer, decompression::RequestDecompress
 use tower_serve_static::{File, ServeDir, ServeFile};
 use tracing::{debug, error};
 use utoipa::{
-    OpenApi, openapi::Tag, openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder,
+    openapi::extensions::ExtensionsBuilder, openapi::tag::TagBuilder, openapi::Tag, OpenApi,
 };
 use utoipa_axum::{router::OpenApiRouter, routes};
 use utoipa_redoc::{Redoc, Servable};
@@ -585,7 +585,7 @@ async fn set_waiting_page(
     }
 
     queue
-        .set_waiting_page(&config.queue_prefix, &waiting_page, &locale)
+        .set_waiting_page(&config.queue_prefix, &locale, &waiting_page)
         .await?;
 
     Ok(())
