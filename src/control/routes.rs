@@ -124,6 +124,7 @@ pub fn router(state: AppState) -> Router {
         .routes(routes!(get_settings, patch_settings))
         .routes(routes!(get_waiting_page_accept_language))
         .routes(routes!(get_waiting_page, set_waiting_page))
+        .routes(routes!(add_store_id))
         .routes(routes!(get_queue_id, add_queue_id, delete_queue_id))
         .routes(routes!(get_server_sent_events))
         .route("/api/ws", any(get_web_socket))
@@ -589,6 +590,30 @@ async fn set_waiting_page(
         .await?;
 
     Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/store",
+    tag = "queue",
+    summary = "Create a new ID in the store",
+    description = "Creates a brand new ID and returns its position in the store/queue",
+    responses(
+        (status = 201, description = "Created", body = QueuePosition)
+    )
+)]
+async fn add_store_id(State(state): State<AppState>) -> Result<(StatusCode, Json<QueuePosition>)> {
+    let state = state.clone();
+    let config = &state.config;
+    let queue = &state.queue;
+
+    let uuid = queue.new_id();
+    let position = queue.id_promote(&config.queue_prefix, uuid, None).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(QueuePosition::new(uuid, position)),
+    ))
 }
 
 #[utoipa::path(

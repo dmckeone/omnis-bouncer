@@ -1,29 +1,29 @@
 use chrono::{DateTime, Utc};
 use deadpool_redis::{Connection, Pool as RedisPool};
-use futures_util::{Stream, pin_mut};
+use futures_util::{pin_mut, Stream};
 use is_html::is_html;
 use lazy_static::lazy_static;
-use minify_html_onepass::{Cfg, copy as minify};
-use redis::{self, AsyncTypedCommands, pipe};
+use minify_html_onepass::{copy as minify, Cfg};
+use redis::{self, pipe, AsyncTypedCommands};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::{Notify, RwLock, broadcast, broadcast::Receiver};
-use tokio_stream::{StreamExt, wrappers::errors::BroadcastStreamRecvError};
+use tokio::sync::{broadcast, broadcast::Receiver, Notify, RwLock};
+use tokio_stream::{wrappers::errors::BroadcastStreamRecvError, StreamExt};
 use tracing::error;
 use uuid::Uuid;
 
 use crate::constants::{DEBOUNCE_INTERVAL, DEFAULT_WAITING_ROOM_PAGE, HTML_TEMPLATE_DIR};
-use crate::database::{RedisSubscriber, current_time, get_connection};
+use crate::database::{current_time, get_connection, RedisSubscriber};
 use crate::errors::Result;
 use crate::queue::models::{
     QueueEnabled, QueueEvent, QueuePosition, QueueRotate, QueueSettings, QueueStatus, StoreCapacity,
 };
 use crate::queue::scripts::{
-    Scripts, queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key,
-    store_ids_key, waiting_page_key,
+    queue_enabled_key, queue_ids_key, queue_sync_timestamp_key, store_capacity_key, store_ids_key,
+    waiting_page_key, Scripts,
 };
 use crate::stream::debounce;
 
@@ -551,6 +551,27 @@ impl QueueControl {
                     .await;
             }
         };
+
+        Ok(position)
+    }
+
+    // Add a given ID directly to the store, regardless of the state of the queue
+    pub async fn id_promote(
+        &self,
+        prefix: impl Into<String>,
+        id: Uuid,
+        time: Option<DateTime<Utc>>,
+    ) -> Result<QueuePosition> {
+        let prefix = prefix.into();
+        let mut conn = self.conn().await?;
+
+        self.scripts
+            .id_promote(&mut conn, &prefix, id, time, self.validated_expiry)
+            .await?;
+
+        let position = QueuePosition::in_store();
+        self.emit(&mut conn, &prefix, QueueEvent::StoreAdded, None)
+            .await;
 
         Ok(position)
     }
@@ -1260,6 +1281,33 @@ mod test {
 
         let expiry = hget_u64(&mut conn, &redis_key, &id_string).await;
         assert_eq!(expiry, time.timestamp() as u64 + VALIDATED.as_secs());
+
+        clean_keys(prefix).await;
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_id_promote_add() {
+        let prefix = "test_id_promote_add";
+
+        let (queue, mut conn) = test_queue_conn().await;
+
+        // Clear store and initialize store capacity to 0
+        clear_store(prefix, &mut conn).await;
+        queue
+            .set_queue_settings(prefix, true, StoreCapacity::Sized(0))
+            .await
+            .expect("Failed to set queue status");
+
+        let id = queue.new_id();
+
+        // Check that the first ID is in the store
+        let position = queue
+            .id_promote(prefix, id, None)
+            .await
+            .expect("Failed to add ID");
+
+        assert_eq!(position, QueuePosition::Store);
 
         clean_keys(prefix).await;
     }

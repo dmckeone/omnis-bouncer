@@ -59,6 +59,10 @@ pub enum QueuePosition {
 }
 
 impl QueuePosition {
+    pub fn in_store() -> Self {
+        QueuePosition::Store
+    }
+
     pub fn from_redis(status: usize, position: usize) -> Self {
         match status {
             0 => Self::NotPresent,

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
-use deadpool_redis::{Connection, redis};
-use redis::{Script, pipe};
+use deadpool_redis::{redis, Connection};
+use redis::{pipe, Script};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -57,6 +57,7 @@ pub fn waiting_page_key(prefix: impl Into<String>) -> String {
 pub struct Scripts {
     check_sync_keys: Script,
     id_position: Script,
+    id_promote: Script,
     id_remove: Script,
     queue_timeout: Script,
     store_promote: Script,
@@ -82,6 +83,7 @@ impl Scripts {
         let functions = Self {
             check_sync_keys: Self::read("check_sync_keys")?,
             id_position: Self::read("id_position")?,
+            id_promote: Self::read("id_promote")?,
             id_remove: Self::read("id_remove")?,
             queue_timeout: Self::read("queue_timeout")?,
             store_promote: Self::read("store_promote")?,
@@ -94,6 +96,7 @@ impl Scripts {
     pub async fn init(&self, conn: &mut Connection) -> Result<()> {
         self.check_sync_keys.load_async(conn).await?;
         self.id_position.load_async(conn).await?;
+        self.id_promote.load_async(conn).await?;
         self.id_remove.load_async(conn).await?;
         self.queue_timeout.load_async(conn).await?;
         self.store_promote.load_async(conn).await?;
@@ -166,6 +169,34 @@ impl Scripts {
         };
 
         Ok((status, position))
+    }
+
+    /// Promote (or create) a given ID in the store
+    pub async fn id_promote(
+        &self,
+        conn: &mut Connection,
+        prefix: impl Into<String>,
+        id: Uuid,
+        time: Option<DateTime<Utc>>,
+        validated_expiry: Duration,
+    ) -> Result<()> {
+        let prefix = prefix.into();
+
+        let time = match time {
+            Some(t) => t,
+            None => current_time(conn).await?,
+        };
+
+        let _: Option<String> = self
+            .id_promote
+            .arg(prefix)
+            .arg(String::from(id))
+            .arg(time.timestamp())
+            .arg(validated_expiry.as_secs())
+            .invoke_async(conn)
+            .await?;
+
+        Ok(())
     }
 
     /// Remove a given UUID from the queue/store
