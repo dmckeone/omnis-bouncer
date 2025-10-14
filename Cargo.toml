@@ -27,15 +27,15 @@ is-html = "0.1"
 lazy_static = "1.5"
 minify-html-onepass = "0.16"
 redis = { version = "0.32", features = ["aio", "tokio-rustls-comp"] }
-regex = "1.11"
+regex = "1.12"
 reqwest = { version = "0.12", features = ["stream", "rustls-tls"], default-features = false }
 resolve-path = "0.1"
 rustls = { version = "0.23", features = ["aws_lc_rs"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.47", features = ["rt-multi-thread", "signal"] }
+tokio = { version = "1.48", features = ["rt-multi-thread", "signal"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-toml = "0.9.7"
+toml = "0.9"
 tower = { version = "0.5", features = ["buffer", "limit", "load-shed"] }
 tower-cookies = { version = "0.11", features = ["private"] }
 tower-http = { version = "0.6", features = ["auth", "cors", "compression-full", "decompression-full", "timeout", "trace", "util", "validate-request", "set-header"] }

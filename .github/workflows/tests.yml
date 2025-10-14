@@ -8,14 +8,10 @@ on:
 
 jobs:
   ui:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-arm
     defaults:
       run:
         working-directory: ui
-
-    strategy:
-      matrix:
-        os: [ ubuntu-latest ]
 
     steps:
       - uses: actions/checkout@v5
@@ -45,7 +41,15 @@ jobs:
         run: pnpm run format-ci
 
       - name: UI Test
-        run: pnpm run test
+        run: pnpm run test-ci
+
+      - name: Upload Test Report
+        uses: dorny/test-reporter@v2
+        if: ${{ !cancelled() }}       # run this step even if previous step failed
+        with:
+          name: UI Tests              # Name of the check run which will be created
+          path: ui/vitest.xml         # Path to test results
+          reporter: jest-junit        # Format of test results
 
       - name: UI Build
         run: pnpm run build
@@ -57,11 +61,7 @@ jobs:
 
   server-format:
     needs: ui
-    strategy:
-      matrix:
-        os: [ ubuntu-latest ]
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04-arm
 
     env:
       CARGO_TERM_COLOR: always
@@ -81,11 +81,8 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
-
-      - name: Build
-        run: cargo build --verbose
-        env:
-          OMNIS_BOUNCER_BUILD_UI: 0
+        with:
+          key: lint
 
       - name: Lint
         run: cargo clippy --all -- -D warnings
@@ -94,12 +91,13 @@ jobs:
         run: cargo fmt --all -- --check
 
   server-test:
-    needs: ui
+    needs: [ ui, server-format ]
     strategy:
+      max-parallel: 1
       matrix:
         redis: [ redis:8, valkey/valkey:8 ]
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04-arm
 
     env:
       CARGO_TERM_COLOR: always
@@ -122,53 +120,86 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install junit-test
+        run: cargo install junit-test
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
 
       - name: Build
-        run: cargo build --profile test --verbose
+        run: cargo build --locked --no-default-features --profile test --verbose
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
 
       - name: Run Tests
-        run: cargo test --profile test --verbose
+        run: junit-test
         env:
           TEST_REDIS_URI: redis://127.0.0.1:6379/0
           OMNIS_BOUNCER_BUILD_UI: 0
 
+      - name: Upload Test Report
+        uses: dorny/test-reporter@v2
+        if: ${{ !cancelled() }}       # run this step even if previous step failed
+        with:
+          name: Server Tests              # Name of the check run which will be created
+          path: junit.xml            # Path to test results
+          reporter: java-junit        # Format of test results
+
 
   server-build:
-    needs: ui
+    needs: [ ui, server-format, server-test ]
     strategy:
       matrix:
         include:
-          - build: linux-x86-64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+          - build: linux-x86-64-gnu
+            os: ubuntu-22.04
+            build_targets:
+              - x86_64-unknown-linux-gnu
+            binary_target: x86_64-unknown-linux-gnu
             shell: bash
 
-          - build: linux-aarch64
-            os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+          - build: linux-aarch64-gnu
+            os: ubuntu-22.04-arm
+            build_targets:
+              - aarch64-unknown-linux-gnu
+            binary_target: aarch64-unknown-linux-gnu
             shell: bash
 
-          - build: macos-x86-64
-            os: macos-latest
-            target: x86_64-apple-darwin
+          - build: linux-x86-64-musl
+            os: ubuntu-22.04
+            build_targets:
+              - x86_64-unknown-linux-musl
+            binary_target: x86_64-unknown-linux-musl
             shell: bash
 
-          - build: macos-aarch64
-            os: macos-latest
-            target: aarch64-apple-darwin
+          - build: linux-aarch64-musl
+            os: ubuntu-22.04-arm
+            build_targets:
+              - aarch64-unknown-linux-musl
+            binary_target: aarch64-unknown-linux-musl
+            shell: bash
+
+          - build: macos-universal
+            os: macos-14
+            build_targets:
+              - x86_64-apple-darwin
+              - aarch64-apple-darwin
+            binary_target: universal-apple-darwin
             shell: bash
 
           - build: windows-x86-64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
+            os: windows-2022
+            build_targets:
+              - x86_64-pc-windows-msvc
+            binary_target: x86_64-pc-windows-msvc
             shell: powershell
 
           - build: windows-aarch64
-            os: windows-latest
-            target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            build_targets:
+              - aarch64-pc-windows-msvc
+            binary_target: aarch64-pc-windows-msvc
             shell: powershell
 
     runs-on: ${{ matrix.os }}
@@ -186,50 +217,74 @@ jobs:
           name: ui-dist
           path: ui/dist
 
-      - name: Install and configure dependencies
-        if: ${{ matrix.os == 'ubuntu-latest' }}
+      - name: Create linux musl build environment
+        if: ${{ startsWith(matrix.build, 'linux-') && endsWith(matrix.build, '-musl') }}
         run: |
-          sudo apt-get install -qq crossbuild-essential-arm64
+          sudo apt-get install -qq musl-dev musl-tools
 
           # some additional configuration for cross-compilation on linux
-          cat >>~/.cargo/config <<EOF
+          cat >>~/.cargo/config.toml <<EOF
+          [build]
+          rustflags = ["-Clinker=rust-lld", "-Ctarget-feature=+crt-static"]
+          EOF
+
+      - name: Create linux GNU build environment
+        if: ${{ startsWith(matrix.build, 'linux-') && endsWith(matrix.build, '-gnu') }}
+        run: |
+          sudo apt-get install -qq build-essential
+
+          # some additional configuration for cross-compilation on linux
+          cat >>~/.cargo/config.toml <<EOF          
+          [target.x86_64-unknown-linux-gnu]
+          linker = "x86_64-linux-gnu-gcc"
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ join(matrix.build_targets, ',') }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.build }}
 
-      - name: Build Release
-        run: cargo build --locked --release --verbose --target ${{ matrix.target }}
+      - name: Build Release(s)
+        run: cargo build --locked --no-default-features --verbose --profile release --target ${{ join(matrix.build_targets, ' --target ') }}
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
 
-      - name: Archive
+      - name: Build macOS Universal Binary
+        if: ${{ startsWith(matrix.os, 'macos-') && join(matrix.build_targets,',') != matrix.binary_target }}
+        run: |
+          rm -rf target/${{ matrix.binary_target }}
+          mkdir -p target/${{ matrix.binary_target }}/release
+          lipo -create -output target/${{ matrix.binary_target }}/release/omnis-bouncer target/{${{ join(matrix.build_targets, ',') }}}/release/omnis-bouncer
+
+      - name: Archive (powershell)
         shell: powershell
         if: ${{ matrix.shell == 'powershell' }}
         run: |
-          Move-Item -Path "target/${{ matrix.target }}/release/omnis-bouncer.exe" -Destination "omnis-bouncer.exe"
+          Move-Item -Path "target/${{ matrix.binary_target }}/release/omnis-bouncer.exe" -Destination "omnis-bouncer.exe"
           7z a "omnis-bouncer-${{ matrix.build }}.zip" "omnis-bouncer.exe" "config.example.toml"
 
       - uses: actions/upload-artifact@v4
+        name: Upload Artifact (.zip)
         if: ${{ matrix.shell == 'powershell' }}
         with:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer-${{ matrix.build }}.zip
 
-      - name: Archive
+      - name: Archive (bash)
         shell: bash
-        if: ${{ matrix.os == 'bash' }}
+        if: ${{ matrix.shell == 'bash' }}
         run: |
-          mv  "target/${{ matrix.target }}/release/omnis-bouncer" "omnis-bouncer"
+          mv  "target/${{ matrix.binary_target }}/release/omnis-bouncer" "omnis-bouncer"
           tar -czf "omnis-bouncer-${{ matrix.build }}.tar.gz" "omnis-bouncer" "config.example.toml"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ matrix.os == 'bash' }}
+        name: Upload Artifact (.tar.gz)
+        if: ${{ matrix.shell == 'bash' }}
         with:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer-${{ matrix.build }}.tar.gz
