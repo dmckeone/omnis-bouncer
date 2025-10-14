@@ -3,20 +3,25 @@ name = "omnis-bouncer"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.precommit]
+format = "cargo fmt --check"
+sort = "cargo sort --check"
+lint = "cargo clippy"
+
 [dependencies]
 anyhow = "1.0"
+async-stream = "0.3"
 axum = { version = "0.8", features = ["http2", "multipart", "ws"] }
 axum-extra = { version = "0.10", features = ["cookie", "cookie-key-expansion", "cookie-private", "cookie-signed"] }
 axum-response-cache = "0.4"
 axum-server = { version = "0.7", features = ["tls-rustls"] }
-async-stream = "0.3"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 deadpool-redis = { version = "0.22", features = ["rt_tokio_1"] }
+futures-util = "0.3"
 http = "1.3"
 http-body-util = "0.1"
-futures-util = "0.3"
 include_dir = "0.7"
 is-html = "0.1"
 lazy_static = "1.5"
@@ -35,8 +40,8 @@ tower = { version = "0.5", features = ["buffer", "limit", "load-shed"] }
 tower-cookies = { version = "0.11", features = ["private"] }
 tower-http = { version = "0.6", features = ["auth", "cors", "compression-full", "decompression-full", "timeout", "trace", "util", "validate-request", "set-header"] }
 tower-serve-static = { version = "0.1", features = ["metadata"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 urlencoding = "2.1"
 utoipa = { version = "5.4", features = ["axum_extras", "chrono", "openapi_extensions", "preserve_order"] }
 utoipa-axum = "0.2"
@@ -44,11 +49,10 @@ utoipa-redoc = { version = "6.0", features = ["axum"] }
 utoipa-swagger-ui = { version = "9.0", features = ["axum"] }
 uuid = { version = "1.18", features = ["fast-rng", "v4"] }
 
-
-
 [build-dependencies]
 build-deps = "0.1"
 
 [dev-dependencies]
+pre-commit-hooks = "0.3.0"
 rstest = "0.26"
 tracing-test = "0.2"
