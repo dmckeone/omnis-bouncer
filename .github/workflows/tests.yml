@@ -144,26 +144,32 @@ jobs:
           - build: linux-x86-64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            shell: bash
 
           - build: linux-aarch64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            shell: bash
 
           - build: macos-x86-64
             os: macos-latest
             target: x86_64-apple-darwin
+            shell: bash
 
           - build: macos-aarch64
             os: macos-latest
             target: aarch64-apple-darwin
+            shell: bash
 
           - build: windows-x86-64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            shell: powershell
 
           - build: windows-aarch64
             os: windows-latest
             target: aarch64-pc-windows-msvc
+            shell: powershell
 
     runs-on: ${{ matrix.os }}
 
@@ -183,7 +189,7 @@ jobs:
       - name: Install and configure dependencies
         if: ${{ matrix.os == 'ubuntu-latest' }}
         run: |
-          sudo apt-get install -qq libssl-dev crossbuild-essential-arm64
+          sudo apt-get install -qq crossbuild-essential-arm64
 
           # some additional configuration for cross-compilation on linux
           cat >>~/.cargo/config <<EOF
@@ -198,32 +204,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build Release
-        run: cargo build --release --verbose --target ${{ matrix.target }}
+        run: cargo build --locked --release --verbose --target ${{ matrix.target }}
         env:
           OMNIS_BOUNCER_BUILD_UI: 0
 
       - name: Archive
         shell: powershell
-        if: ${{ matrix.os == 'windows-latest' }}
+        if: ${{ matrix.shell == 'powershell' }}
         run: |
           Move-Item -Path "target/${{ matrix.target }}/release/omnis-bouncer.exe" -Destination "omnis-bouncer.exe"
           7z a "omnis-bouncer-${{ matrix.build }}.zip" "omnis-bouncer.exe" "config.example.toml"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ matrix.os == 'windows-latest' }}
+        if: ${{ matrix.shell == 'powershell' }}
         with:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer-${{ matrix.build }}.zip
 
       - name: Archive
         shell: bash
-        if: ${{ matrix.os != 'windows-latest' }}
+        if: ${{ matrix.os == 'bash' }}
         run: |
           mv  "target/${{ matrix.target }}/release/omnis-bouncer" "omnis-bouncer"
           tar -czf "omnis-bouncer-${{ matrix.build }}.tar.gz" "omnis-bouncer" "config.example.toml"
 
       - uses: actions/upload-artifact@v4
-        if: ${{ matrix.os != 'windows-latest' }}
+        if: ${{ matrix.os == 'bash' }}
         with:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer-${{ matrix.build }}.tar.gz
