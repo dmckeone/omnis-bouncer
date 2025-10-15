@@ -1,10 +1,13 @@
-name: Tests
+name: Build
 
 on:
   push:
     branches: [ "master" ]
   pull_request:
     branches: [ "master" ]
+
+permissions:
+  contents: write
 
 jobs:
   ui:
@@ -288,3 +291,31 @@ jobs:
         with:
           name: omnis-bouncer-${{ matrix.build }}
           path: omnis-bouncer-${{ matrix.build }}.tar.gz
+
+  release:
+    runs-on: ubuntu-22.04-arm
+    needs: [ server-build ]
+    if: github.ref_type == 'tag'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: bin
+          pattern: omnis-bouncer-*
+          merge-multiple: 'true'
+      - name: Extract package.json version
+        id: package-version
+        uses: colathro/crate-version@2.0.0
+      - name: Build release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: v${{ steps.package-version.outputs.version }}
+          files: |
+            bin/omnis-bouncer-*.tar.gz
+            bin/omnis-bouncer-*.zip
+            COPYRIGHT.md
+            LICENSE-APACHE
+            LICENSE-MIT
