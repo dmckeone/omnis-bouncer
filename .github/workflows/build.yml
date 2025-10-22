@@ -246,6 +246,19 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
+      - name: Create windows static build environment
+        if: ${{ startsWith(matrix.build, 'windows-') && matrix.shell == 'powershell' }}
+        run: |
+          # some additional configuration for static builds on Windows
+          $config = @"
+          [target.x86_64-pc-windows-msvc]
+          rustflags = ["-C", "target-feature=+crt-static"]
+          [target.aarch64-pc-windows-msvc]
+          rustflags = ["-C", "target-feature=+crt-static"]
+          "@
+          
+          Add-Content "~/.cargo/config.toml" $config
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ join(matrix.build_targets, ',') }}
